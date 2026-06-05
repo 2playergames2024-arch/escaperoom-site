@@ -56,6 +56,17 @@ export async function POST(request: Request) {
             ]
           : [],
       },
+      initialPayments: [
+        {
+          reason: "Paid online",
+          comment: "Paid through Authorize.net hosted payment form",
+          amount: {
+            amount: Number(body.total).toFixed(2),
+            currency: "USD",
+          },
+          paymentMethod: "creditCard",
+        },
+      ],
     }),
   });
 
