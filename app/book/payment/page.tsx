@@ -85,7 +85,7 @@ function PaymentPageContent() {
           firstName,
           lastName,
           phone,
-          baseUrl: "https://escaperoommystery.com",
+          baseUrl: "https://escaperoom-site-ikgr.vercel.app",
         }),
       });
 
