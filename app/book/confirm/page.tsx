@@ -1,16 +1,15 @@
 "use client";
 
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
 
-export default function ConfirmPage() {
+function ConfirmPageContent() {
   const searchParams = useSearchParams();
 
   const [status, setStatus] = useState("Finalizing your booking...");
   const [bookingId, setBookingId] = useState("");
 
   const sessionId = searchParams.get("sessionId") || "";
-  const [sessionData, setSessionData] = useState<any>(null);
 
   useEffect(() => {
     async function finalizeBooking() {
@@ -26,13 +25,9 @@ export default function ConfirmPage() {
           return;
         }
 
-        setSessionData(sessionJson.session);
-
         const res = await fetch("/api/bookeo/finalize", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(sessionJson.session),
         });
 
@@ -77,5 +72,13 @@ export default function ConfirmPage() {
         )}
       </section>
     </main>
+  );
+}
+
+export default function ConfirmPage() {
+  return (
+    <Suspense fallback={<main className="p-8">Finalizing your booking...</main>}>
+      <ConfirmPageContent />
+    </Suspense>
   );
 }

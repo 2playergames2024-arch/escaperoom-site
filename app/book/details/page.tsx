@@ -4,9 +4,9 @@ import { LOCATIONS } from "../../data/locations";
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 
-export default function BookingDetailsPage() {
+function BookingDetailsPageContent() {
   const searchParams = useSearchParams();
 
   const room = searchParams.get("room") || "Selected Room";
@@ -230,5 +230,12 @@ export default function BookingDetailsPage() {
         </div>
       </section>
     </main>
+  );
+}
+export default function BookingDetailsPage() {
+  return (
+    <Suspense fallback={<main className="p-8">Loading booking details...</main>}>
+      <BookingDetailsPageContent />
+    </Suspense>
   );
 }

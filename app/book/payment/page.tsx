@@ -3,9 +3,9 @@
 import { LOCATIONS } from "../../data/locations";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 
-export default function PaymentPage() {
+function PaymentPageContent() {
   const searchParams = useSearchParams();
   const [isPaying, setIsPaying] = useState(false);
   const [error, setError] = useState("");
@@ -177,5 +177,12 @@ export default function PaymentPage() {
         </Link>
       </section>
     </main>
+  );
+}
+export default function PaymentPage() {
+  return (
+    <Suspense fallback={<main className="p-8">Loading payment...</main>}>
+      <PaymentPageContent />
+    </Suspense>
   );
 }
