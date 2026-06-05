@@ -58,10 +58,10 @@ export async function POST(req: Request) {
                 settingValue: JSON.stringify({
                     showReceipt: false,
                     url:
-                      "https://escaperoommystery.com/book/confirm" +
+                      `${body.baseUrl}/book/confirm` +
                       `?sessionId=${encodeURIComponent(body.sessionId)}`,
                     urlText: "Continue",
-                    cancelUrl: "https://escaperoommystery.com/book/payment",
+                    cancelUrl: `${body.baseUrl}/book/payment`,
                     cancelUrlText: "Cancel",
                 }),
             },
