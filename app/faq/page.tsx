@@ -1,3 +1,6 @@
+import SupportFooter from "@/app/components/SupportFooter";
+import SupportHeader from "@/app/components/SupportHeader";
+
 const faqs = [
   {
     question: "Are your escape rooms private?",
@@ -43,6 +46,8 @@ const faqs = [
 
 export default function FAQPage() {
   return (
+    <>
+      <SupportHeader />
     <main className="min-h-screen bg-white px-6 py-16 text-slate-950">
       <section className="mx-auto max-w-4xl">
         <p className="text-sm font-black uppercase tracking-[0.25em] text-orange-500">
@@ -71,5 +76,7 @@ export default function FAQPage() {
         </div>
       </section>
     </main>
+    <SupportFooter />
+    </>
   );
 }

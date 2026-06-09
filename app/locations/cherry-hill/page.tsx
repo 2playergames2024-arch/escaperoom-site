@@ -1,5 +1,7 @@
 "use client";
 
+import LocationFooter from "@/app/components/LocationFooter";
+import LocationHeader from "@/app/components/LocationHeader";
 import Link from "next/link";
 import Image from "next/image";
 
@@ -33,7 +35,16 @@ const rooms = [
 
 export default function CherryHillPage() {
   return (
-    <main className="min-h-screen bg-white text-slate-950">
+    <>
+      <LocationHeader
+        locationName="Cherry Hill, NJ"
+        locationSubtitle="Garden State Park"
+        homeHref="/locations/cherry-hill"
+        roomsHref="/locations/cherry-hill#rooms"
+        bookHref="/locations/cherry-hill/book-now"
+      />
+
+      <main className="min-h-screen bg-white text-slate-950">
       {/* Hero */}
       <section className="relative overflow-hidden bg-slate-950 text-white">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,#334155_1px,transparent_1px)] [background-size:36px_36px] opacity-30" />
@@ -248,5 +259,14 @@ export default function CherryHillPage() {
         </Link>
       </section>
     </main>
+    <LocationFooter
+      locationName="Cherry Hill"
+      streetAddress="1200 Haddonfield Road, 2nd Floor"
+      cityStateZip="Cherry Hill, NJ 08002"
+      phone="610-757-1053"
+      bookHref="/locations/cherry-hill/book-now"
+      roomsHref="/locations/cherry-hill#rooms"
+    />
+    </>
   );
 }

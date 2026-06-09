@@ -22,27 +22,41 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-white text-slate-950">
       {/* Header */}
-      <header className="sticky top-0 z-50 bg-white border-b border-slate-200">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-          <Link href="/" className="text-2xl font-black tracking-tight">
-            ESCAPE ROOM MYSTERY
-          </Link>
+<header className="sticky top-0 z-50 bg-white border-b border-slate-200">
+  <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+    <Link href="/" className="text-2xl font-black tracking-tight leading-none">
+      <div>ESCAPE ROOM</div>
+      <div>MYSTERY</div>
+    </Link>
 
-          <nav className="hidden items-center gap-8 text-sm font-bold uppercase md:flex">
-            <Link href="/locations/king-of-prussia">King of Prussia</Link>
-            <Link href="/locations/cherry-hill">Cherry Hill</Link>
-            <Link href="/rooms">Rooms</Link>
-            <Link href="/events">Private Events</Link>
-          </nav>
+    <nav className="hidden items-center gap-10 text-sm font-bold uppercase md:flex">
+      <Link
+        href="/locations/king-of-prussia"
+        className="block text-center leading-none"
+      >
+        <div>KING OF</div>
+        <div>PRUSSIA</div>
+      </Link>
 
-          <a
-            href="#locations"
-            className="rounded-full bg-orange-500 px-6 py-3 text-sm font-black uppercase text-white hover:bg-orange-600"
-          >
-            Choose Location
-          </a>
-        </div>
-      </header>
+      <Link
+        href="/locations/cherry-hill"
+        className="block text-center leading-none"
+      >
+        <div>CHERRY</div>
+        <div>HILL</div>
+      </Link>
+    </nav>
+
+    <a
+      href="#locations"
+      className="rounded-full bg-orange-500 px-6 py-3 text-center text-sm font-black uppercase leading-none text-white hover:bg-orange-600"
+    >
+      Choose
+      <br />
+      Location
+    </a>
+  </div>
+</header>
 
       {/* Hero */}
       <section className="relative overflow-hidden bg-slate-950 text-white">
@@ -261,8 +275,15 @@ export default function Home() {
           </div>
 
           <div className="flex gap-6 text-sm font-bold uppercase text-slate-300">
-            <Link href="/locations/king-of-prussia">King of Prussia</Link>
-            <Link href="/locations/cherry-hill">Cherry Hill</Link>
+            <Link href="/locations/king-of-prussia" className="text-center">
+              <div>KING OF</div>
+              <div>PRUSSIA</div>
+            </Link>
+
+            <Link href="/locations/cherry-hill" className="text-center">
+              <div>CHERRY</div>
+              <div>HILL</div>
+            </Link>
             <a href="#locations">Choose Location</a>
           </div>
         </div>

@@ -1,5 +1,7 @@
 "use client";
 
+import LocationFooter from "@/app/components/LocationFooter";
+import LocationHeader from "@/app/components/LocationHeader";
 import Link from "next/link";
 import Image from "next/image";
 
@@ -28,6 +30,14 @@ const rooms = [
 
 export default function KingOfPrussiaPage() {
   return (
+    <>
+      <LocationHeader
+        locationName="King of Prussia, PA"
+        locationSubtitle="Moore Park"
+        homeHref="/locations/king-of-prussia"
+        roomsHref="/locations/king-of-prussia#rooms"
+        bookHref="/locations/king-of-prussia/book-now"
+      />
     <main className="min-h-screen bg-white text-slate-950">
       {/* Hero */}
       <section className="relative overflow-hidden bg-slate-950 text-white">
@@ -230,5 +240,14 @@ export default function KingOfPrussiaPage() {
         </Link>
       </section>
     </main>
+    <LocationFooter
+      locationName="King of Prussia"
+      streetAddress="840 First Avenue, Suite 500"
+      cityStateZip="King of Prussia, PA 19406"
+      phone="610-757-1053"
+      bookHref="/locations/king-of-prussia/book-now"
+      roomsHref="/locations/king-of-prussia#rooms"
+    />
+    </>
   );
 }
