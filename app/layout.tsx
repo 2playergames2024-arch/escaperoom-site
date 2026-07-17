@@ -23,20 +23,7 @@ export default function RootLayout({
         <main>
           {children}
         </main>
-
-        <footer
-          style={{
-            backgroundColor: '#1a1a1a',
-            color: '#aaa',
-            textAlign: 'center',
-            padding: '40px 20px',
-            marginTop: '60px',
-          }}
-        >
-          <p>
-            © 2026 Escape Room Mystery • Philadelphia • King of Prussia • Cherry Hill
-          </p>
-        </footer>
+        
       </body>
     </html>
   )

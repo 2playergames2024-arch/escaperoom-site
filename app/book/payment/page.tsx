@@ -15,6 +15,16 @@ function PaymentPageContent() {
   const eventId = searchParams.get("eventId") || "";
   const room = searchParams.get("room") || "";
   const date = searchParams.get("date") || "";
+
+  const formattedDate = date
+    ? new Date(`${date}T12:00:00`).toLocaleDateString("en-US", {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+      })
+    : "";
+
   const time = searchParams.get("time") || "";
   const players = searchParams.get("players") || "";
   const total = searchParams.get("total") || "";
@@ -125,7 +135,7 @@ function PaymentPageContent() {
 
         <div className="mt-8 grid gap-3 text-lg font-bold">
           <p>Room: {room}</p>
-          <p>Date: {date}</p>
+          <p>Date: {formattedDate}</p>
           <p>Time: {time}</p>
           <p>Players: {players}</p>
 

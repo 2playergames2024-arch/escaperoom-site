@@ -27,6 +27,7 @@ export default function BillionairesDenPage() {
       />
 
       <main className="min-h-screen bg-white text-slate-950">
+        {/* Hero */}
         <section
           className="relative overflow-hidden bg-slate-950 text-white"
           style={{ height: `${HERO_HEIGHT}px` }}
@@ -37,6 +38,7 @@ export default function BillionairesDenPage() {
             fill
             priority
             className="object-cover"
+            style={{ objectPosition: "50% 25%" }}
           />
 
           <div
@@ -61,7 +63,9 @@ export default function BillionairesDenPage() {
                 The Billionaire&apos;s Den
               </div>
 
-              <div className="mt-2 text-3xl md:text-5xl">Inheritance</div>
+              <div className="mt-2 text-3xl md:text-5xl">
+                Inheritance
+              </div>
             </h1>
 
             <div
@@ -85,31 +89,157 @@ export default function BillionairesDenPage() {
           </div>
         </section>
 
-        <section className="mx-auto max-w-5xl px-6 py-20">
-          <p className="mb-3 text-sm font-black uppercase tracking-[0.25em] text-orange-500">
-            Your Mission
-          </p>
+        {/* Mission + First Image */}
+        <section className="px-6 py-16 md:py-20">
+          <div className="mx-auto grid max-w-6xl items-center gap-10 lg:grid-cols-2 lg:gap-14">
+            <div>
+              <p className="mb-3 text-2xl font-black uppercase tracking-[0.18em] text-orange-500">
+                Your Mission
+              </p>
 
-          <h2 className="mb-6 text-4xl font-black md:text-5xl">
-            Your Eccentric Uncle Left Behind a Fortune
-          </h2>
+              <h2 className="mb-7 text-4xl font-black leading-tight md:text-5xl">
+                Enter the Den. Claim the Billionaire&apos;s Fortune.
+              </h2>
 
-          <div className="space-y-5 text-lg leading-relaxed text-slate-700">
-            <p>
-              ...but claiming the inheritance will not be easy. Hidden inside his
-              private den are clues, puzzles, secrets, and one final challenge.
-              Work together, prove yourselves worthy, and solve his final game
-              before the inheritance slips away.
-            </p>
+              <div className="space-y-5 text-lg leading-relaxed text-slate-700">
+                <p>
+                  Your eccentric Billionaire uncle has left behind a fortune,
+                  but he never intended to make the inheritance easy.
+                </p>
+
+                <p>
+                  Hidden throughout his private den are secrets, clues, and one
+                  final challenge designed to test everyone who hopes to claim
+                  his wealth.
+                </p>
+
+                <p>
+                  Enter the den, uncover what your uncle concealed, and complete
+                  his final game before the inheritance slips away.
+                </p>
+
+                <p className="pt-1 text-xl font-black text-slate-950">
+                  You have 60 minutes. Prove your team is worthy.
+                </p>
+              </div>
+            </div>
+
+            <img
+              src="/images/rooms/billionaires-den-action-01.jpg"
+              alt="Guests investigating the Billionaire's final challenge"
+              className="h-auto w-full rounded-[32px] shadow-xl"
+            />
           </div>
         </section>
 
-        <section className="bg-slate-950 px-6 py-20 text-white">
+        {/* Group Experience + Second Image */}
+        <section className="border-y border-slate-100 bg-white px-6 py-16 md:py-20">
+          <div className="section-two-layout mx-auto max-w-6xl">
+            <div className="section-two-text">
+              <p className="mb-3 text-2xl font-black uppercase tracking-[0.18em] text-orange-500">
+                Built for Your Team
+              </p>
+
+              <h2 className="mb-7 text-4xl font-black leading-tight md:text-5xl">
+                Search the Den. Follow the Clues. Unlock the Inheritance.
+              </h2>
+
+              <div className="space-y-5 text-lg leading-relaxed text-slate-700">
+                <p>
+                  Explore the Billionaire&apos;s private collection, examine
+                  unusual objects, connect hidden clues, and work together to
+                  unravel the mystery behind his fortune.
+                </p>
+
+                <p>
+                  Some players will notice details others miss. Others will
+                  recognize patterns, connect discoveries, or find the next step
+                  when the trail seems to disappear.
+                </p>
+
+                <p className="pt-1 text-xl font-black text-slate-950">
+                  Every discovery brings your team closer to the fortune waiting
+                  at the end of the challenge.
+                </p>
+              </div>
+            </div>
+
+            <img
+              src="/images/rooms/billionaires-den-teamwork-01.jpg"
+              alt="A group working together inside the Billionaire's Den"
+              className="section-two-image h-auto w-full rounded-[32px] shadow-xl"
+            />
+          </div>
+
+          <style jsx>{`
+            .section-two-layout {
+              display: grid;
+              grid-template-areas:
+                "text"
+                "image";
+              gap: 2.5rem;
+              align-items: center;
+            }
+
+            .section-two-text {
+              grid-area: text;
+            }
+
+            .section-two-image {
+              grid-area: image;
+            }
+
+            @media (min-width: 1024px) {
+              .section-two-layout {
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                grid-template-areas: "image text";
+                gap: 3.5rem;
+              }
+            }
+          `}</style>
+        </section>
+
+        {/* Step Inside + Third Image */}
+        <section className="bg-slate-100 px-6 py-16 md:py-20">
+          <div className="mx-auto grid max-w-6xl items-center gap-10 lg:grid-cols-2 lg:gap-14">
+            <div>
+              <p className="mb-3 text-2xl font-black uppercase tracking-[0.18em] text-orange-500">
+                Step Inside
+              </p>
+
+              <h2 className="mb-7 text-4xl font-black leading-tight md:text-5xl">
+                Enter a World Built by an Eccentric Billionaire
+              </h2>
+
+              <div className="space-y-5 text-lg leading-relaxed text-slate-700">
+                <p>
+                  Step inside a colorful private den filled with unusual
+                  artwork, hidden compartments, strange inventions, and clues
+                  left behind by a man who never did anything the ordinary way.
+                </p>
+
+                <p className="pt-1 text-xl font-black text-slate-950">
+                  The fortune is hidden inside. Can your team uncover it?
+                </p>
+              </div>
+            </div>
+
+            <img
+              src="/images/rooms/billionaires-den-atmosphere-01.jpg"
+              alt="Inside the colorful and mysterious Billionaire's Den"
+              className="h-auto w-full rounded-[32px] shadow-xl"
+            />
+          </div>
+        </section>
+
+        {/* Room Details */}
+        <section className="bg-slate-950 px-6 py-16 text-white md:py-20">
           <div className="mx-auto max-w-7xl">
-            <div className="mb-12 text-center">
+            <div className="mb-10 text-center">
               <p className="mb-3 text-sm font-black uppercase tracking-[0.25em] text-orange-400">
                 Room Details
               </p>
+
               <h2 className="text-4xl font-black md:text-5xl">
                 Plan Your Escape
               </h2>
@@ -128,6 +258,7 @@ export default function BillionairesDenPage() {
                   <p className="mb-3 text-sm font-black uppercase tracking-[0.2em] text-orange-400">
                     {label}
                   </p>
+
                   <h3 className="text-3xl font-black">{value}</h3>
                 </div>
               ))}
@@ -135,14 +266,15 @@ export default function BillionairesDenPage() {
           </div>
         </section>
 
-        <section className="bg-orange-500 px-6 py-20 text-center text-white">
+        {/* Final CTA */}
+        <section className="bg-orange-500 px-6 py-16 text-center text-white md:py-20">
           <h2 className="mx-auto mb-6 max-w-3xl text-4xl font-black md:text-6xl">
             Ready to Claim the Inheritance?
           </h2>
 
           <p className="mx-auto mb-8 max-w-2xl text-xl font-semibold">
-            Gather your team and book your mission at our King of Prussia
-            location.
+            Gather your team and take on the Billionaire&apos;s final challenge
+            at our King of Prussia location.
           </p>
 
           <Link
@@ -155,10 +287,10 @@ export default function BillionairesDenPage() {
       </main>
 
       <LocationFooter
-        locationName="King of Prussia, PA"
-        streetAddress="1030 W 8th Ave"
+        locationName="King of Prussia"
+        streetAddress="840 First Avenue, Suite 500"
         cityStateZip="King of Prussia, PA 19406"
-        phone="(215) 987-8784"
+        phone="610-757-1053"
         bookHref="/locations/king-of-prussia/book-now"
         roomsHref="/locations/king-of-prussia#rooms"
       />

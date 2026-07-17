@@ -27,6 +27,7 @@ export default function EgyptianTombPage() {
       />
 
       <main className="min-h-screen bg-white text-slate-950">
+        {/* Hero */}
         <section
           className="relative overflow-hidden bg-slate-950 text-white"
           style={{ height: `${HERO_HEIGHT}px` }}
@@ -37,6 +38,7 @@ export default function EgyptianTombPage() {
             fill
             priority
             className="object-cover"
+            style={{ objectPosition: "50% 25%" }}
           />
 
           <div
@@ -62,7 +64,7 @@ export default function EgyptianTombPage() {
               </div>
 
               <div className="mt-2 text-3xl md:text-5xl">
-                Imhotep's Curse
+                Imhotep&apos;s Curse
               </div>
             </h1>
 
@@ -87,31 +89,156 @@ export default function EgyptianTombPage() {
           </div>
         </section>
 
-        <section className="mx-auto max-w-5xl px-6 py-20">
-          <p className="mb-3 text-sm font-black uppercase tracking-[0.25em] text-orange-500">
-            Your Mission
-          </p>
+        {/* Mission + First Image */}
+        <section className="px-6 py-16 md:py-20">
+          <div className="mx-auto grid max-w-6xl items-center gap-10 lg:grid-cols-2 lg:gap-14">
+            <div>
+              <p className="mb-3 text-2xl font-black uppercase tracking-[0.18em] text-orange-500">
+                Your Mission
+              </p>
 
-          <h2 className="mb-6 text-4xl font-black md:text-5xl">
-            The Tomb Has Been Sealed for Centuries
-          </h2>
+              <h2 className="mb-7 text-4xl font-black leading-tight md:text-5xl">
+                Enter the Tomb. Break Imhotep&apos;s Curse.
+              </h2>
 
-          <div className="space-y-5 text-lg leading-relaxed text-slate-700">
-            <p>
-              ...enter the tomb in search of glory or curse. You and your team
-              have entered an ancient Egyptian tomb filled with mystery, hidden
-              chambers, and secrets left behind by Imhotep. Solve the clues,
-              uncover the truth, and escape before the tomb claims you forever.
-            </p>
+              <div className="space-y-5 text-lg leading-relaxed text-slate-700">
+                <p>
+                  For centuries, the tomb of Imhotep has remained sealed and
+                  hidden from the outside world.
+                </p>
+
+                <p>
+                  Now your team has entered the ancient burial chamber in search
+                  of its secrets—but disturbing the tomb has awakened a deadly
+                  curse.
+                </p>
+
+                <p>
+                  Explore the chambers, uncover what Imhotep left behind, and
+                  break the curse before the tomb seals forever.
+                </p>
+
+                <p className="pt-1 text-xl font-black text-slate-950">
+                  You have 60 minutes. Escape before the tomb claims you.
+                </p>
+              </div>
+            </div>
+
+            <img
+              src="/images/rooms/egyptian-tomb-action-01.jpg"
+              alt="Guests exploring clues inside the Egyptian Tomb"
+              className="h-auto w-full rounded-[32px] shadow-xl"
+            />
           </div>
         </section>
 
-        <section className="bg-slate-950 px-6 py-20 text-white">
+        {/* Group Experience + Second Image */}
+        <section className="border-y border-slate-100 bg-white px-6 py-16 md:py-20">
+          <div className="section-two-layout mx-auto max-w-6xl">
+            <div className="section-two-text">
+              <p className="mb-3 text-2xl font-black uppercase tracking-[0.18em] text-orange-500">
+                Built for Your Team
+              </p>
+
+              <h2 className="mb-7 text-4xl font-black leading-tight md:text-5xl">
+                Search the Chambers. Decode the Symbols. Escape the Curse.
+              </h2>
+
+              <div className="space-y-5 text-lg leading-relaxed text-slate-700">
+                <p>
+                  Explore the tomb, examine ancient artifacts, decipher hidden
+                  symbols, and work together to uncover the path forward.
+                </p>
+
+                <p>
+                  Some players will notice details carved into the walls.
+                  Others will recognize patterns, connect discoveries, or find
+                  meaning in the objects hidden throughout the chambers.
+                </p>
+
+                <p className="pt-1 text-xl font-black text-slate-950">
+                  Every discovery brings your team one step closer to breaking
+                  the curse and escaping the tomb.
+                </p>
+              </div>
+            </div>
+
+            <img
+              src="/images/rooms/egyptian-tomb-teamwork-01.jpg"
+              alt="A group working together inside the Egyptian Tomb"
+              className="section-two-image h-auto w-full rounded-[32px] shadow-xl"
+            />
+          </div>
+
+          <style jsx>{`
+            .section-two-layout {
+              display: grid;
+              grid-template-areas:
+                "text"
+                "image";
+              gap: 2.5rem;
+              align-items: center;
+            }
+
+            .section-two-text {
+              grid-area: text;
+            }
+
+            .section-two-image {
+              grid-area: image;
+            }
+
+            @media (min-width: 1024px) {
+              .section-two-layout {
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                grid-template-areas: "image text";
+                gap: 3.5rem;
+              }
+            }
+          `}</style>
+        </section>
+
+        {/* Step Inside + Third Image */}
+        <section className="bg-slate-100 px-6 py-16 md:py-20">
+          <div className="mx-auto grid max-w-6xl items-center gap-10 lg:grid-cols-2 lg:gap-14">
+            <div>
+              <p className="mb-3 text-2xl font-black uppercase tracking-[0.18em] text-orange-500">
+                Step Inside
+              </p>
+
+              <h2 className="mb-7 text-4xl font-black leading-tight md:text-5xl">
+                Enter the Lost Tomb of Imhotep
+              </h2>
+
+              <div className="space-y-5 text-lg leading-relaxed text-slate-700">
+                <p>
+                  Step beyond the sealed entrance and into an ancient world of
+                  carved stone walls, hidden chambers, mysterious symbols, and
+                  secrets buried for centuries.
+                </p>
+
+                <p className="pt-1 text-xl font-black text-slate-950">
+                  The tomb is open. Will your team escape before it closes?
+                </p>
+              </div>
+            </div>
+
+            <img
+              src="/images/rooms/egyptian-tomb-atmosphere-01.jpg"
+              alt="Inside the ancient and mysterious Egyptian Tomb"
+              className="h-auto w-full rounded-[32px] shadow-xl"
+            />
+          </div>
+        </section>
+
+        {/* Room Details */}
+        <section className="bg-slate-950 px-6 py-16 text-white md:py-20">
           <div className="mx-auto max-w-7xl">
-            <div className="mb-12 text-center">
-              <p className="mb-3 text-sm font-black uppercase tracking-[0.25em] text-orange-400">
+            <div className="mb-10 text-center">
+              <p className="mb-3 text-2xl font-black uppercase tracking-[0.18em] text-orange-400">
                 Room Details
               </p>
+
               <h2 className="text-4xl font-black md:text-5xl">
                 Plan Your Escape
               </h2>
@@ -130,6 +257,7 @@ export default function EgyptianTombPage() {
                   <p className="mb-3 text-sm font-black uppercase tracking-[0.2em] text-orange-400">
                     {label}
                   </p>
+
                   <h3 className="text-3xl font-black">{value}</h3>
                 </div>
               ))}
@@ -137,13 +265,15 @@ export default function EgyptianTombPage() {
           </div>
         </section>
 
-        <section className="bg-orange-500 px-6 py-20 text-center text-white">
+        {/* Final CTA */}
+        <section className="bg-orange-500 px-6 py-16 text-center text-white md:py-20">
           <h2 className="mx-auto mb-6 max-w-3xl text-4xl font-black md:text-6xl">
             Ready to Enter the Tomb?
           </h2>
 
           <p className="mx-auto mb-8 max-w-2xl text-xl font-semibold">
-            Gather your team and book your mission at our Cherry Hill location.
+            Gather your team and face Imhotep&apos;s curse at our Cherry Hill
+            location.
           </p>
 
           <Link
@@ -156,10 +286,10 @@ export default function EgyptianTombPage() {
       </main>
 
       <LocationFooter
-        locationName="Cherry Hill, NJ"
-        streetAddress="2040 Springdale Rd"
-        cityStateZip="Cherry Hill, NJ 08003"
-        phone="(215) 987-8784"
+        locationName="Cherry Hill"
+        streetAddress="1200 Haddonfield Road, 2nd Floor"
+        cityStateZip="Cherry Hill, NJ 08002"
+        phone="610-757-1053"
         bookHref="/locations/cherry-hill/book-now"
         roomsHref="/locations/cherry-hill#rooms"
       />

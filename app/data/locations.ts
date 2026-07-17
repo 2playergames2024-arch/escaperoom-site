@@ -13,11 +13,11 @@ export const LOCATIONS = {
         basePrice: 35,
       },
 
-      "Billionaire's Den - The Inheritance": {
+      "The Billionaire's Den - Inheritance": {
         basePrice: 35,
       },
 
-      "Revolution - Spies & Patriotism": {
+      "Revolution Spies - Patriotism": {
         basePrice: 35,
       },
     },

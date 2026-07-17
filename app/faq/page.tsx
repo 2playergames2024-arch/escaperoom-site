@@ -30,17 +30,22 @@ const faqs = [
   {
     question: "How many players do you recommend?",
     answer:
-      "Most groups enjoy our adventures with 4–8 players. Our rooms are large for the industry and can comfortably accommodate up to 10 players. Most of our adventures can be enjoyed by two players. However, we recommend at least three players for Egyptian Tomb and Billionaire's Den, and four players often provide the best experience. Egyptian Tomb contains multiple puzzles designed for three or more participants. If your group has only two players, your game master can assist when needed so you can still enjoy the adventure. For large groups, birthdays, and team-building events, we have successfully accommodated groups as large as 16 players in a single room.",
+      "Most groups enjoy our adventures with 4–8 players. Our rooms are large for the industry and can comfortably accommodate up to 10 players. Most of our adventures can be enjoyed by two players. However, we recommend at least three players for Egyptian Tomb, The Laboratory and Billionaire's Den, and four players often provide the best experience. Egyptian Tomb and The Laboratory contains puzzles designed for three or more participants. If your group has only two players, your game master can assist when needed so you can still enjoy the adventure. For large groups, birthdays, and team-building events, we have successfully accommodated groups as large as 16 players in a single room.",
   },
   {
     question: "Am I really locked in?",
     answer:
-      "No. You may leave an adventure at any time. Restroom breaks, emergencies, or simply stepping out for a moment are never a problem.",
+      "No. You may leave your adventure at any time. Whether you need a restroom break or simply want to step out for a moment, you're always in control.",
   },
   {
     question: "What about parking?",
     answer:
       "Parking at both our King of Prussia and Cherry Hill locations is free.",
+  },
+  {
+    question: "Can I add tickets after purchase?",
+    answer:
+      "Absolutely! You may add additional players at any time before your game, including when you arrive. If you're still finalizing your group, you can reserve your game now and add additional players later.",
   },
 ];
 

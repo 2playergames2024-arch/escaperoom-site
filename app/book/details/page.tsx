@@ -14,8 +14,27 @@ function BookingDetailsPageContent() {
   const productId = searchParams.get("productId") || "";
   const eventId = searchParams.get("eventId") || "";
   const date = searchParams.get("date") || "";
+
+  const formattedDate = date
+    ? new Date(`${date}T12:00:00`).toLocaleDateString("en-US", {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+      })
+    : "";
+
   const time = searchParams.get("time") || "";
   const seats = Number(searchParams.get("seats") || "10");
+  const isSaturday = date
+    ? new Date(`${date}T12:00:00`).getDay() === 6
+    : false;
+
+  const minimumPlayers = isSaturday ? 4 : 2;
+
+  const minimumPlayerText = isSaturday
+    ? "Minimum 4 players • Saturdays only"
+    : "Minimum 2 players";
   const roomInfo =
     LOCATIONS.kingOfPrussia.rooms[
       room as keyof typeof LOCATIONS.kingOfPrussia.rooms
@@ -23,7 +42,7 @@ function BookingDetailsPageContent() {
 
   const basePrice = roomInfo?.basePrice ?? 35.01;
 
-  const [players, setPlayers] = useState(2);
+  const [players, setPlayers] = useState(minimumPlayers);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -111,7 +130,7 @@ function BookingDetailsPageContent() {
     <main className="min-h-screen bg-white text-slate-950">
       <section className="mx-auto max-w-6xl px-6 py-12">
         <Link
-          href="/locations/king-of-prussia/book-now"
+          href={`/locations/king-of-prussia/book-now?date=${encodeURIComponent(date)}`}
           className="mb-8 inline-block text-sm font-black uppercase text-orange-500"
         >
           ← Back to times
@@ -129,6 +148,7 @@ function BookingDetailsPageContent() {
                     alt={room}
                     fill
                     className="object-cover"
+                    style={{ objectPosition: "50% 10%" }}
                     sizes="(max-width: 768px) 100vw, 60vw"
                   />
                   <div className="absolute inset-0 bg-black/25" />
@@ -143,7 +163,7 @@ function BookingDetailsPageContent() {
                 <h2 className="mt-2 text-3xl font-black">{room}</h2>
 
                 <div className="mt-6 grid gap-3 text-lg font-bold">
-                  <p>Date: {date}</p>
+                  <p>Date: {formattedDate}</p>
                   <p>Time: {time}</p>
                   <p>Price: ${basePrice.toFixed(2)} per player</p>
                   <p>{seats} seats available</p>
@@ -152,13 +172,21 @@ function BookingDetailsPageContent() {
             </div>
 
             <div className="mt-8 rounded-[18px] border-2 border-slate-950">
-              <div className="border-b-2 border-slate-950 p-4 text-center text-xl font-black">
-                How many players?
+              <div className="border-b-2 border-slate-950 p-4 text-center">
+                <div className="text-xl font-black">
+                  How many players?
+                </div>
+
+                <p className="mt-2 text-sm font-bold text-slate-600">
+                  {minimumPlayerText}
+                </p>
               </div>
 
               <div className="flex items-center justify-center gap-10 p-6">
                 <button
-                  onClick={() => setPlayers((value) => Math.max(1, value - 1))}
+                  onClick={() =>
+                    setPlayers((value) => Math.max(minimumPlayers, value - 1))
+                  }
                   className="h-12 w-12 rounded-full border-2 border-orange-500 text-2xl font-black text-orange-500"
                 >
                   -

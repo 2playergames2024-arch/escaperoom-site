@@ -10,21 +10,29 @@ const rooms = [
     name: "Area 51 - Annihilation",
     image: "/images/rooms/area51-homepage-01.jpg",
     href: "/locations/king-of-prussia/rooms/area-51-annihilation",
+    bookHref: "/locations/king-of-prussia/book-now?room=area-51",
+    description: "Stop the Alien threat before it reaches Earth.",
   },
   {
     name: "Egyptian Tomb - Imhotep's Curse",
     image: "/images/rooms/egyptian-tomb-homepage-01.jpg",
     href: "/locations/king-of-prussia/rooms/egyptian-tomb-imhoteps-curse",
+    bookHref: "/locations/king-of-prussia/book-now?room=egyptian-tomb",
+    description: "Break the Pharaoh’s curse before the tomb seals forever.",
   },
   {
     name: "The Billionaire's Den - Inheritance",
     image: "/images/rooms/billionaires-den-homepage-01.jpg",
     href: "/locations/king-of-prussia/rooms/billionaires-den-inheritance",
+    bookHref: "/locations/king-of-prussia/book-now?room=billionaires-den",
+    description: "Uncover the fortune hidden inside a Billionaire’s final challenge.",
   },
   {
     name: "Revolution Spies - Patriotism",
     image: "/images/rooms/revolution-spies-homepage-01.jpg",
     href: "/locations/king-of-prussia/rooms/revolution-spies-patriotism",
+    bookHref: "/locations/king-of-prussia/book-now?room=revolution-spies",
+    description: "Outwit the enemy and help turn the tide of the Revolution.",
   },
 ];
 
@@ -43,57 +51,132 @@ export default function KingOfPrussiaPage() {
       <section className="relative overflow-hidden bg-slate-950 text-white">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,#334155_1px,transparent_1px)] [background-size:36px_36px] opacity-30" />
 
-        <div className="relative mx-auto grid min-h-[620px] max-w-7xl items-center gap-10 px-6 py-20 lg:grid-cols-2">
+        <div className="relative mx-auto max-w-7xl px-6 py-16 lg:py-20">
+
+          {/* FULL-WIDTH HERO HEADING */}
           <div>
-            <p className="mb-4 text-sm font-black uppercase tracking-[0.25em] text-orange-400">
+            <p className="mb-5 text-2xl font-black uppercase tracking-[0.10em] text-orange-400">
               King of Prussia, PA
             </p>
 
-            <h1 className="mb-6 text-5xl font-black leading-tight tracking-tight md:text-7xl">
-              The Ultimate Escape Room Adventure
+            <h1 className="max-w-full text-5xl font-black leading-[1.05] tracking-tight md:text-6xl xl:whitespace-nowrap xl:text-7xl">
+              Bring your group. We'll handle the fun.
             </h1>
-
-            <p className="mb-8 max-w-xl text-xl leading-relaxed text-slate-300">
-              Choose your room, gather your team, and race the clock in a fully
-              immersive 60-minute experience.
-            </p>
-
-            <div className="flex flex-col gap-4 sm:flex-row">
-              <Link
-                href="/locations/king-of-prussia/book-now"
-                className="rounded-full bg-orange-500 px-8 py-4 text-center text-lg font-black uppercase text-white hover:bg-orange-600"
-              >
-                Book Now
-              </Link>
-
-              <a
-                href="#rooms"
-                className="rounded-full border-2 border-white px-8 py-4 text-center text-lg font-black uppercase text-white hover:bg-white hover:text-slate-950"
-              >
-                View Rooms
-              </a>
-            </div>
           </div>
 
-          <div className="rounded-[32px] border border-white/10 bg-white/10 p-6 shadow-2xl backdrop-blur">
-            <div className="relative h-[360px] overflow-hidden rounded-[24px]">
-              <video
-                autoPlay
-                muted
-                playsInline
-                className="h-full w-full object-cover"
-                onTimeUpdate={(e) => {
-                    const video = e.currentTarget;
-                    if (video.currentTime >= 17) {
-                    video.currentTime = 0;
-                    video.play();
-                    }
-                }}
-                >
-                <source src="/videos/hero.mp4" type="video/mp4" />
-              </video>
+          {/* LOWER HERO CONTENT */}
+          <div className="mt-12 grid items-center gap-10 lg:grid-cols-2 lg:gap-14">
 
-              <div className="absolute inset-0 bg-black/35" />
+            {/* VIDEO
+                On narrower screens, the video appears first.
+                On large desktop screens, it moves to the right.
+            */}
+            <div className="order-1 lg:order-2">
+              <div className="rounded-[32px] border border-white/10 bg-white/10 p-6 shadow-2xl backdrop-blur">
+                <div className="relative h-[340px] overflow-hidden rounded-[24px] md:h-[380px]">
+                  <video
+                    autoPlay
+                    muted
+                    playsInline
+                    className="h-full w-full object-cover"
+                    onTimeUpdate={(e) => {
+                      const video = e.currentTarget;
+
+                      if (video.currentTime >= 17) {
+                        video.currentTime = 0;
+                        video.play();
+                      }
+                    }}
+                  >
+                    <source
+                      src="/videos/hero.mp4"
+                      type="video/mp4"
+                    />
+                  </video>
+
+                  <div className="absolute inset-0 bg-black/25" />
+                </div>
+              </div>
+            </div>
+
+            {/* CREDIBILITY + AWARD + BUTTONS */}
+            <div className="order-2 lg:order-1">
+
+              {/* CORE CREDIBILITY */}
+              <p className="text-lg font-black uppercase leading-relaxed tracking-[0.03em] text-white md:text-xl">
+                Custom-Built Adventures
+                <span className="mx-2 text-orange-400">•</span>
+                Family Owned
+                <span className="mx-2 text-orange-400">•</span>
+                10 Years Strong
+              </p>
+
+              {/* GOOGLE + PRIVATE ROOMS */}
+              <div className="mt-5 flex flex-wrap items-center gap-x-6 gap-y-4">
+
+                <div className="text-lg font-black text-white md:text-xl">
+                  <span className="text-yellow-400">
+                    ★★★★★
+                  </span>
+
+                  <span className="ml-2">
+                    5.0 on Google
+                  </span>
+                </div>
+
+                <div
+                  className="text-lg font-black uppercase tracking-[0.05em] text-orange-400 md:text-xl"
+                  style={{
+                    marginLeft: "32px",
+                  }}
+                >
+                  Always Private Rooms
+                </div>
+
+              </div>
+
+              {/* COMPACT AWARD PANEL */}
+              <div className="mt-7 flex max-w-xl items-center justify-between gap-5 rounded-2xl border border-white/20 bg-white/5 px-5 py-4">
+
+                <div>
+                  <p className="text-2xl font-black uppercase tracking-[0.04em] text-orange-400 md:text-3xl">
+                    Best of 2026
+                  </p>
+
+                  <p className="mt-1 text-sm font-black uppercase tracking-[0.08em] text-white md:text-base">
+                    BusinessRate Award Winner
+                  </p>
+                </div>
+
+                <Image
+                  src="/images/awards/businessrate-best-of-2026.png"
+                  alt="BusinessRate Best of 2026 Award Winner"
+                  width={220}
+                  height={180}
+                  className="h-auto w-28 shrink-0 md:w-36"
+                />
+
+              </div>
+
+              {/* BUTTONS */}
+              <div className="mt-8 flex flex-col gap-4 sm:flex-row">
+
+                <Link
+                  href="/locations/king-of-prussia/book-now"
+                  className="flex-1 rounded-full bg-orange-500 px-5 py-3 text-center font-black uppercase text-white"
+                >
+                  Book
+                </Link>
+
+                <a
+                  href="#rooms"
+                  className="rounded-full border-2 border-white px-8 py-4 text-center text-lg font-black uppercase text-white hover:bg-white hover:text-slate-950"
+                >
+                  View Rooms
+                </a>
+
+              </div>
+
             </div>
           </div>
         </div>
@@ -102,15 +185,14 @@ export default function KingOfPrussiaPage() {
       {/* Rooms */}
       <section id="rooms" className="mx-auto max-w-7xl px-6 py-20">
         <div className="mb-12 text-center">
-          <p className="mb-3 text-sm font-black uppercase tracking-[0.25em] text-orange-500">
-            Choose Your Game
+          <p className="mb-3 text-lg font-black uppercase tracking-[0.2em] text-orange-500">
+            What will you Conquer?
           </p>
           <h2 className="text-4xl font-black md:text-5xl">
-            Immersive Escape Rooms
+            One-of-a-Kind Adventures
           </h2>
           <p className="mx-auto mt-4 max-w-2xl text-lg text-slate-600">
-            Each room has its own story, puzzles, surprises, and
-            race-against-the-clock mission.
+            Designed by people who love escape rooms for people who love great adventures.
           </p>
         </div>
 
@@ -147,8 +229,7 @@ export default function KingOfPrussiaPage() {
 
                 <h3 className="mb-3 text-2xl font-black">{room.name}</h3>
                 <p className="mb-6 text-slate-600">
-                  Work together, find clues, solve puzzles, and complete your
-                  mission before time runs out.
+                  {room.description}
                 </p>
 
                 <div className="flex gap-3">
@@ -159,7 +240,7 @@ export default function KingOfPrussiaPage() {
                     Learn More
                   </Link>
                   <Link
-                    href="/locations/king-of-prussia/book-now"
+                    href={room.bookHref}
                     className="flex-1 rounded-full bg-orange-500 px-5 py-3 text-center font-black uppercase text-white"
                   >
                     Book
@@ -179,22 +260,32 @@ export default function KingOfPrussiaPage() {
               Groups & Events
             </p>
             <h2 className="mb-5 text-4xl font-black md:text-5xl">
-              Perfect for Parties, Teams, and Special Events
+              Every Great Gathering Deserves an Unforgettable Adventure.
             </h2>
             <p className="mb-8 text-lg leading-relaxed text-slate-300">
-              Bring your group together for an unforgettable challenge. Great
-              for birthdays, corporate team building, youth groups, and family
-              nights.
+              Perfect for birthdays, family outings, youth groups, and team building.
+              Planning for 20 or more? Contact us for discounted group pricing.
             </p>
-            <Link
-              href="/events"
-              className="rounded-full bg-orange-500 px-8 py-4 font-black uppercase text-white"
-            >
-              Plan Your Event
-            </Link>
+            <div className="mt-8 flex justify-center lg:justify-start">
+              <Link
+                href="/contact"
+                className="rounded-full bg-orange-500 px-8 py-4 font-black uppercase text-white"
+              >
+                Contact Us
+              </Link>
+            </div>
           </div>
 
-          <div className="h-80 rounded-[32px] bg-slate-800" />
+          <div className="relative h-80 overflow-hidden rounded-[32px]">
+            <Image
+              src="/images/rooms/posing-fun.jpg"
+              alt="Friends enjoying an Escape Room Mystery adventure"
+              fill
+              className="object-cover"
+              style={{ objectPosition: "50% 10%" }}
+              sizes="(max-width: 1024px) 100vw, 50vw"
+            />
+          </div>
         </div>
       </section>
 

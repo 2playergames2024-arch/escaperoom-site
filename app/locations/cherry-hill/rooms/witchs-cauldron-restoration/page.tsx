@@ -27,6 +27,7 @@ export default function WitchsCauldronPage() {
       />
 
       <main className="min-h-screen bg-white text-slate-950">
+        {/* Hero */}
         <section
           className="relative overflow-hidden bg-slate-950 text-white"
           style={{ height: `${HERO_HEIGHT}px` }}
@@ -37,6 +38,7 @@ export default function WitchsCauldronPage() {
             fill
             priority
             className="object-cover"
+            style={{ objectPosition: "50% 25%" }}
           />
 
           <div
@@ -58,7 +60,7 @@ export default function WitchsCauldronPage() {
               style={{ textShadow: TITLE_TEXT_SHADOW }}
             >
               <div className="text-4xl md:text-6xl">
-                Witch's Cauldron
+                Witch&apos;s Cauldron
               </div>
 
               <div className="mt-2 text-3xl md:text-5xl">
@@ -87,33 +89,159 @@ export default function WitchsCauldronPage() {
           </div>
         </section>
 
-        <section className="mx-auto max-w-5xl px-6 py-20">
-          <p className="mb-3 text-sm font-black uppercase tracking-[0.25em] text-orange-500">
-            Your Mission
-          </p>
+        {/* Mission + First Image */}
+        <section className="px-6 py-16 md:py-20">
+          <div className="mx-auto grid max-w-6xl items-center gap-10 lg:grid-cols-2 lg:gap-14">
+            <div>
+              <p className="mb-3 text-2xl font-black uppercase tracking-[0.18em] text-orange-500">
+                Your Mission
+              </p>
 
-          <h2 className="mb-6 text-4xl font-black md:text-5xl">
-            The Ancient Magic Is Fading
-          </h2>
+              <h2 className="mb-7 text-4xl font-black leading-tight md:text-5xl">
+                Restore the Cauldron. Save the Kingdom.
+              </h2>
 
-          <div className="space-y-5 text-lg leading-relaxed text-slate-700">
-            <p>
-              ...restoring the kingdom will not be easy. Long ago, powerful
-              magic protected the land, but the enchantments are failing, the
-              cauldron has gone cold, and darkness is beginning to spread.
-              Gather your team, uncover forgotten secrets, restore the magical
-              ingredients, and complete the ritual before the last spark of
-              magic disappears forever.
-            </p>
+              <div className="space-y-5 text-lg leading-relaxed text-slate-700">
+                <p>
+                  Long ago, powerful magic protected the kingdom—but the ancient
+                  enchantments are fading.
+                </p>
+
+                <p>
+                  The Witch&apos;s Cauldron has gone cold, its magical
+                  ingredients have been scattered, and darkness is beginning to
+                  spread across the land.
+                </p>
+
+                <p>
+                  Enter the Witch&apos;s hidden world, recover what has been
+                  lost, and complete the restoration ritual before the final
+                  spark of magic disappears.
+                </p>
+
+                <p className="pt-1 text-xl font-black text-slate-950">
+                  You have 60 minutes. Restore the magic before darkness takes
+                  over.
+                </p>
+              </div>
+            </div>
+
+            <img
+              src="/images/rooms/witchs-cauldron-action-01.jpg"
+              alt="A guest investigating magical symbols inside Witch's Cauldron"
+              className="h-auto w-full rounded-[32px] shadow-xl"
+            />
           </div>
         </section>
 
-        <section className="bg-slate-950 px-6 py-20 text-white">
+        {/* Magical Details + Second Image */}
+        <section className="border-y border-slate-100 bg-white px-6 py-16 md:py-20">
+          <div className="section-two-layout mx-auto max-w-6xl">
+            <div className="section-two-text">
+              <p className="mb-3 text-2xl font-black uppercase tracking-[0.18em] text-orange-500">
+                Unlock the Magic
+              </p>
+
+              <h2 className="mb-7 text-4xl font-black leading-tight md:text-5xl">
+                Decode the Symbols. Restore the Ritual. Rekindle the Cauldron.
+              </h2>
+
+              <div className="space-y-5 text-lg leading-relaxed text-slate-700">
+                <p>
+                  Examine glowing symbols, uncover forgotten spells, search for
+                  magical ingredients, and connect the clues hidden throughout
+                  the Witch&apos;s world.
+                </p>
+
+                <p>
+                  Each discovery reveals another part of the restoration ritual
+                  and brings the cauldron closer to life.
+                </p>
+
+                <p className="pt-1 text-xl font-black text-slate-950">
+                  The magic will not return on its own. Your team must restore
+                  it.
+                </p>
+              </div>
+            </div>
+
+            <img
+              src="/images/rooms/witchs-cauldron-detail-01.jpg"
+              alt="Glowing magical symbols inside Witch's Cauldron"
+              className="section-two-image h-auto w-full rounded-[32px] shadow-xl"
+            />
+          </div>
+
+          <style jsx>{`
+            .section-two-layout {
+              display: grid;
+              grid-template-areas:
+                "text"
+                "image";
+              gap: 2.5rem;
+              align-items: center;
+            }
+
+            .section-two-text {
+              grid-area: text;
+            }
+
+            .section-two-image {
+              grid-area: image;
+            }
+
+            @media (min-width: 1024px) {
+              .section-two-layout {
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                grid-template-areas: "image text";
+                gap: 3.5rem;
+              }
+            }
+          `}</style>
+        </section>
+
+        {/* Step Inside + Third Image */}
+        <section className="bg-slate-100 px-6 py-16 md:py-20">
+          <div className="mx-auto grid max-w-6xl items-center gap-10 lg:grid-cols-2 lg:gap-14">
+            <div>
+              <p className="mb-3 text-2xl font-black uppercase tracking-[0.18em] text-orange-500">
+                Step Inside
+              </p>
+
+              <h2 className="mb-7 text-4xl font-black leading-tight md:text-5xl">
+                Enter the Witch&apos;s Enchanted World
+              </h2>
+
+              <div className="space-y-5 text-lg leading-relaxed text-slate-700">
+                <p>
+                  Step into a world of glowing symbols, hidden chambers,
+                  enchanted objects, mysterious creatures, and magical secrets
+                  waiting to be restored.
+                </p>
+
+                <p className="pt-1 text-xl font-black text-slate-950">
+                  The kingdom&apos;s magic is fading. Will your team bring it
+                  back?
+                </p>
+              </div>
+            </div>
+
+            <img
+              src="/images/rooms/witchs-cauldron-atmosphere-01.jpg"
+              alt="Inside the enchanted Witch's Cauldron escape room"
+              className="h-auto w-full rounded-[32px] shadow-xl"
+            />
+          </div>
+        </section>
+
+        {/* Room Details */}
+        <section className="bg-slate-950 px-6 py-16 text-white md:py-20">
           <div className="mx-auto max-w-7xl">
-            <div className="mb-12 text-center">
-              <p className="mb-3 text-sm font-black uppercase tracking-[0.25em] text-orange-400">
+            <div className="mb-10 text-center">
+              <p className="mb-3 text-2xl font-black uppercase tracking-[0.18em] text-orange-400">
                 Room Details
               </p>
+
               <h2 className="text-4xl font-black md:text-5xl">
                 Plan Your Escape
               </h2>
@@ -132,6 +260,7 @@ export default function WitchsCauldronPage() {
                   <p className="mb-3 text-sm font-black uppercase tracking-[0.2em] text-orange-400">
                     {label}
                   </p>
+
                   <h3 className="text-3xl font-black">{value}</h3>
                 </div>
               ))}
@@ -139,13 +268,15 @@ export default function WitchsCauldronPage() {
           </div>
         </section>
 
-        <section className="bg-orange-500 px-6 py-20 text-center text-white">
+        {/* Final CTA */}
+        <section className="bg-orange-500 px-6 py-16 text-center text-white md:py-20">
           <h2 className="mx-auto mb-6 max-w-3xl text-4xl font-black md:text-6xl">
             Ready to Restore the Magic?
           </h2>
 
           <p className="mx-auto mb-8 max-w-2xl text-xl font-semibold">
-            Gather your team and book your mission at our Cherry Hill location.
+            Gather your team and restore the Witch&apos;s magic at our Cherry
+            Hill location.
           </p>
 
           <Link
@@ -158,10 +289,10 @@ export default function WitchsCauldronPage() {
       </main>
 
       <LocationFooter
-        locationName="Cherry Hill, NJ"
-        streetAddress="2040 Springdale Rd"
-        cityStateZip="Cherry Hill, NJ 08003"
-        phone="(215) 987-8784"
+        locationName="Cherry Hill"
+        streetAddress="1200 Haddonfield Road, 2nd Floor"
+        cityStateZip="Cherry Hill, NJ 08002"
+        phone="610-757-1053"
         bookHref="/locations/cherry-hill/book-now"
         roomsHref="/locations/cherry-hill#rooms"
       />
