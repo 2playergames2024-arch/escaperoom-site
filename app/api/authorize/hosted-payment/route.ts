@@ -29,6 +29,13 @@ export async function POST(req: Request) {
       );
     }
 
+    const location =
+      body.location === "cherry-hill"
+        ? "cherry-hill"
+        : "king-of-prussia";
+
+    const cancelUrl =
+      `${body.baseUrl}/locations/${location}/book-now`;
     const payload = {
       getHostedPaymentPageRequest: {
         merchantAuthentication: {
@@ -61,7 +68,7 @@ export async function POST(req: Request) {
                       `${body.baseUrl}/book/confirm` +
                       `?sessionId=${encodeURIComponent(body.sessionId)}`,
                     urlText: "Continue",
-                    cancelUrl: `${body.baseUrl}/book/payment`,
+                    cancelUrl: cancelUrl,
                     cancelUrlText: "Cancel",
                 }),
             },

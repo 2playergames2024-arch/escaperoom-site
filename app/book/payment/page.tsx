@@ -7,6 +7,17 @@ import { Suspense, useState } from "react";
 
 function PaymentPageContent() {
   const searchParams = useSearchParams();
+  const locationParam = searchParams.get("location");
+
+  const location =
+    locationParam === "cherry-hill"
+      ? "cherry-hill"
+      : "king-of-prussia";
+
+  const locationData =
+    location === "cherry-hill"
+      ? LOCATIONS.cherryHill
+      : LOCATIONS.kingOfPrussia;
   const [isPaying, setIsPaying] = useState(false);
   const [error, setError] = useState("");
 
@@ -33,8 +44,8 @@ function PaymentPageContent() {
   const phone = searchParams.get("phone") || "";
 
   const roomInfo =
-    LOCATIONS.kingOfPrussia.rooms[
-      room as keyof typeof LOCATIONS.kingOfPrussia.rooms
+    locationData.rooms[
+      room as keyof typeof locationData.rooms
     ];
 
   const basePrice = roomInfo?.basePrice ?? 35.01;
@@ -66,6 +77,7 @@ function PaymentPageContent() {
           lastName,
           email,
           phone,
+          location,
           total,
         }),
       });
@@ -180,7 +192,7 @@ function PaymentPageContent() {
         </button>
 
         <Link
-          href="/locations/king-of-prussia/book-now"
+          href={`/locations/${location}/book-now`}
           className="mt-6 inline-block text-sm font-black uppercase text-orange-500"
         >
           ← Start Over

@@ -9,6 +9,17 @@ import { Suspense, useState } from "react";
 function BookingDetailsPageContent() {
   const searchParams = useSearchParams();
 
+  const locationParam = searchParams.get("location");
+  const location =
+    locationParam === "cherry-hill"
+      ? "cherry-hill"
+      : "king-of-prussia";
+
+  const locationData =
+    location === "cherry-hill"
+      ? LOCATIONS.cherryHill
+      : LOCATIONS.kingOfPrussia;
+
   const room = searchParams.get("room") || "Selected Room";
   const image = searchParams.get("image") || "";
   const productId = searchParams.get("productId") || "";
@@ -26,6 +37,7 @@ function BookingDetailsPageContent() {
 
   const time = searchParams.get("time") || "";
   const seats = Number(searchParams.get("seats") || "10");
+
   const isSaturday = date
     ? new Date(`${date}T12:00:00`).getDay() === 6
     : false;
@@ -35,9 +47,10 @@ function BookingDetailsPageContent() {
   const minimumPlayerText = isSaturday
     ? "Minimum 4 players • Saturdays only"
     : "Minimum 2 players";
+
   const roomInfo =
-    LOCATIONS.kingOfPrussia.rooms[
-      room as keyof typeof LOCATIONS.kingOfPrussia.rooms
+    locationData.rooms[
+      room as keyof typeof locationData.rooms
     ];
 
   const basePrice = roomInfo?.basePrice ?? 35.01;
@@ -69,6 +82,7 @@ function BookingDetailsPageContent() {
     }
 
     console.log("Ready for Bookeo hold", {
+      location,
       room,
       productId,
       eventId,
@@ -82,36 +96,42 @@ function BookingDetailsPageContent() {
     });
 
     async function createHold() {
-        const res = await fetch("/api/bookeo/hold", {
-            method: "POST",
-            headers: {
-            "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-            productId,
-            eventId,
-            players,
-            fullName,
-            email,
-            phone,
-            }),
-        });
+      const res = await fetch("/api/bookeo/hold", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          location,
+          productId,
+          eventId,
+          players,
+          fullName,
+          email,
+          phone,
+        }),
+      });
 
-        const data = await res.json();
+      const data = await res.json();
 
-        console.log("Bookeo hold result", data);
+      console.log("Bookeo hold result", data);
 
-        if (!res.ok) {
-            setError(data.message || data.error || "Could not create booking hold.");
-            return;
-        }
+      if (!res.ok) {
+        setError(
+          data.message ||
+            data.error ||
+            "Could not create booking hold."
+        );
+        return;
+      }
 
-        const holdId = data.data.id;
-        const bookeoTotal = data.data.totalPayable.amount;
+      const holdId = data.data.id;
+      const bookeoTotal = data.data.totalPayable.amount;
 
-        window.location.href =
+      window.location.href =
         `/book/payment` +
-        `?holdId=${encodeURIComponent(holdId)}` +
+        `?location=${encodeURIComponent(location)}` +
+        `&holdId=${encodeURIComponent(holdId)}` +
         `&productId=${encodeURIComponent(productId)}` +
         `&eventId=${encodeURIComponent(eventId)}` +
         `&room=${encodeURIComponent(room)}` +
@@ -123,6 +143,7 @@ function BookingDetailsPageContent() {
         `&email=${encodeURIComponent(email)}` +
         `&phone=${encodeURIComponent(phone)}`;
     }
+
     createHold();
   }
 
@@ -130,7 +151,9 @@ function BookingDetailsPageContent() {
     <main className="min-h-screen bg-white text-slate-950">
       <section className="mx-auto max-w-6xl px-6 py-12">
         <Link
-          href={`/locations/king-of-prussia/book-now?date=${encodeURIComponent(date)}`}
+          href={`/locations/${location}/book-now?date=${encodeURIComponent(
+            date
+          )}`}
           className="mb-8 inline-block text-sm font-black uppercase text-orange-500"
         >
           ← Back to times
@@ -185,7 +208,9 @@ function BookingDetailsPageContent() {
               <div className="flex items-center justify-center gap-10 p-6">
                 <button
                   onClick={() =>
-                    setPlayers((value) => Math.max(minimumPlayers, value - 1))
+                    setPlayers((value) =>
+                      Math.max(minimumPlayers, value - 1)
+                    )
                   }
                   className="h-12 w-12 rounded-full border-2 border-orange-500 text-2xl font-black text-orange-500"
                 >
@@ -198,7 +223,9 @@ function BookingDetailsPageContent() {
 
                 <button
                   onClick={() =>
-                    setPlayers((value) => Math.min(seats, value + 1))
+                    setPlayers((value) =>
+                      Math.min(seats, value + 1)
+                    )
                   }
                   className="h-12 w-12 rounded-full border-2 border-orange-500 text-2xl font-black text-orange-500"
                 >
@@ -260,9 +287,14 @@ function BookingDetailsPageContent() {
     </main>
   );
 }
+
 export default function BookingDetailsPage() {
   return (
-    <Suspense fallback={<main className="p-8">Loading booking details...</main>}>
+    <Suspense
+      fallback={
+        <main className="p-8">Loading booking details...</main>
+      }
+    >
       <BookingDetailsPageContent />
     </Suspense>
   );

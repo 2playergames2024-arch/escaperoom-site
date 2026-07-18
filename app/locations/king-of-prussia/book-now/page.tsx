@@ -570,9 +570,8 @@ export default function KingOfPrussiaBookNowPage() {
                                 onClick={() => {
                                   window.location.href =
                                     `/book/details` +
-                                    `?room=${encodeURIComponent(
-                                      room.name
-                                    )}` +
+                                    `?location=king-of-prussia` +
+                                    `&room=${encodeURIComponent(room.name)}` +
                                     `&image=${encodeURIComponent(
                                       room.image
                                     )}` +
