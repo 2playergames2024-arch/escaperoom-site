@@ -23,13 +23,8 @@ export default function GiftVoucherCheckoutClient() {
 
   const isKingOfPrussia = location === "king-of-prussia";
 
-  const locationName = isKingOfPrussia
-    ? "King of Prussia"
-    : "Cherry Hill";
-
-  const locationSubtitle = isKingOfPrussia
-    ? "Pennsylvania"
-    : "New Jersey";
+  const locationName = isKingOfPrussia ? "King of Prussia" : "Cherry Hill";
+  const locationSubtitle = isKingOfPrussia ? "Pennsylvania" : "New Jersey";
 
   const homeHref = isKingOfPrussia
     ? "/locations/king-of-prussia"
@@ -59,16 +54,13 @@ export default function GiftVoucherCheckoutClient() {
         bookHref={bookHref}
       />
 
-      <script
-        type="text/javascript"
+      <Script
         src="https://bookeo.com/widget.js?a=415686T7W9919DC0FEE2A6&startmode=buyvoucher"
+        strategy="afterInteractive"
       />
 
       <main className="min-h-screen bg-white px-6 py-12">
-        <div
-          id="bookeo-widget"
-          className="mx-auto max-w-6xl"
-        />
+        {/* The actual #bookeo-widget div is now in page.tsx */}
       </main>
     </>
   );
