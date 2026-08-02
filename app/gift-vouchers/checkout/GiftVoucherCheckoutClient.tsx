@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import LocationHeader from "../../components/LocationHeader";
 
@@ -14,6 +14,7 @@ declare global {
 
 export default function GiftVoucherCheckoutClient() {
   const searchParams = useSearchParams();
+  const [mounted, setMounted] = useState(false);
 
   const location =
     searchParams.get("location") === "cherry-hill"
@@ -38,14 +39,26 @@ export default function GiftVoucherCheckoutClient() {
     : "/locations/cherry-hill/book-now";
 
   useEffect(() => {
-    // Give Bookeo a moment to load, then try to init
-    const timer = setTimeout(() => {
+    setMounted(true);
+
+    // Load the Bookeo script only on the client
+    const script = document.createElement("script");
+    script.src = "https://bookeo.com/widget.js?a=415686T7W9919DC0FEE2A6";
+    script.async = true;
+    document.body.appendChild(script);
+
+    script.onload = () => {
       if (window.Bookeo?.init) {
         window.Bookeo.init();
       }
-    }, 300);
+    };
 
-    return () => clearTimeout(timer);
+    return () => {
+      // cleanup if needed
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+    };
   }, []);
 
   return (
@@ -59,8 +72,12 @@ export default function GiftVoucherCheckoutClient() {
       />
 
       <main className="min-h-screen bg-white px-6 py-12">
-        {/* This div must stay here so Bookeo can find it */}
-        <div id="bookeo-widget" className="mx-auto max-w-6xl" />
+        {/* Always render the container so Bookeo can find it */}
+        <div
+          id="bookeo-widget"
+          className="mx-auto max-w-6xl"
+          suppressHydrationWarning
+        />
       </main>
     </>
   );
