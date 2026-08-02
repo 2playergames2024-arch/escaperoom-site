@@ -1,7 +1,5 @@
 "use client";
 
-export const dynamic = "force-dynamic";
-
 import { useEffect } from "react";
 import Script from "next/script";
 import { useSearchParams } from "next/navigation";
@@ -15,7 +13,7 @@ declare global {
   }
 }
 
-export default function GiftVoucherCheckoutPage() {
+export default function GiftVoucherCheckoutClient() {
   const searchParams = useSearchParams();
 
   const location =
