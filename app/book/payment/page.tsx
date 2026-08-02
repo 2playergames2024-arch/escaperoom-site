@@ -39,6 +39,11 @@ function PaymentPageContent() {
   const time = searchParams.get("time") || "";
   const players = searchParams.get("players") || "";
   const total = searchParams.get("total") || "";
+  const subtotal = Number(searchParams.get("subtotal") || "0");
+  const promotionDiscount = Number(
+    searchParams.get("promotionDiscount") || "0"
+  );
+  const taxAmount = Number(searchParams.get("tax") || "0");
   const fullName = searchParams.get("fullName") || "";
   const email = searchParams.get("email") || "";
   const phone = searchParams.get("phone") || "";
@@ -50,9 +55,10 @@ function PaymentPageContent() {
 
   const basePrice = roomInfo?.basePrice ?? 35.01;
   const playerCount = Number(players || "0");
-  const subtotal = basePrice * playerCount;
   const finalTotal = Number(total || "0");
-  const taxAmount = Math.max(0, finalTotal - subtotal);
+  const roomCharge = basePrice * playerCount;
+  const currentTax = roomCharge * 0.10;
+  const currentTotal = roomCharge + currentTax;
 
   const nameParts = fullName.trim().split(" ");
   const firstName = nameParts[0] || "";
@@ -152,20 +158,34 @@ function PaymentPageContent() {
           <p>Players: {players}</p>
 
           <div className="mt-4 border-t-2 border-slate-200 pt-4">
+
             <div className="flex justify-between">
-              <span>${basePrice.toFixed(2)} x {players} players</span>
-              <span>${subtotal.toFixed(2)}</span>
+              <span>${basePrice.toFixed(2)} × {players} players</span>
+              <span>${roomCharge.toFixed(2)}</span>
             </div>
 
             <div className="mt-2 flex justify-between">
               <span>Amusement Tax</span>
-              <span>${taxAmount.toFixed(2)}</span>
+              <span>${currentTax.toFixed(2)}</span>
             </div>
 
+            <div className="mt-4 flex justify-between border-t-2 border-slate-300 pt-4 font-black">
+              <span>Current Total</span>
+              <span>${currentTotal.toFixed(2)}</span>
+            </div>
+
+            {promotionDiscount > 0 && (
+              <div className="mt-4 flex justify-between">
+                <span>Promotion/Voucher</span>
+                <span>-${promotionDiscount.toFixed(2)}</span>
+              </div>
+            )}
+
             <div className="mt-4 flex justify-between border-t-2 border-slate-300 pt-4 text-2xl font-black">
-              <span>Total</span>
+              <span>Amount Due</span>
               <span>${finalTotal.toFixed(2)}</span>
             </div>
+
           </div>
         </div>
 

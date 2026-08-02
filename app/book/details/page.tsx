@@ -59,6 +59,7 @@ function BookingDetailsPageContent() {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  const [promoCode, setPromoCode] = useState("");
   const [error, setError] = useState("");
 
   const total = players * basePrice;
@@ -109,12 +110,13 @@ function BookingDetailsPageContent() {
           fullName,
           email,
           phone,
+          promoCode,
         }),
       });
 
       const data = await res.json();
 
-      console.log("Bookeo hold result", data);
+      console.dir(data, { depth: null });
 
       if (!res.ok) {
         setError(
@@ -126,7 +128,13 @@ function BookingDetailsPageContent() {
       }
 
       const holdId = data.data.id;
-      const bookeoTotal = data.data.totalPayable.amount;
+
+      const roomCharge = Number(data.data.price.totalNet.amount);
+      const promotionDiscount = Number(
+        data.data.appliedPromotionDiscount?.amount ?? 0
+      );
+      const tax = Number(data.data.price.totalTaxes.amount);
+      const total = Number(data.data.totalPayable.amount);
 
       window.location.href =
         `/book/payment` +
@@ -138,7 +146,10 @@ function BookingDetailsPageContent() {
         `&date=${encodeURIComponent(date)}` +
         `&time=${encodeURIComponent(time)}` +
         `&players=${players}` +
-        `&total=${encodeURIComponent(bookeoTotal)}` +
+        `&roomCharge=${encodeURIComponent(roomCharge)}` +
+        `&promotionDiscount=${encodeURIComponent(promotionDiscount)}` +
+        `&tax=${encodeURIComponent(tax)}` +
+        `&total=${encodeURIComponent(total)}` +
         `&fullName=${encodeURIComponent(fullName)}` +
         `&email=${encodeURIComponent(email)}` +
         `&phone=${encodeURIComponent(phone)}`;
@@ -259,6 +270,13 @@ function BookingDetailsPageContent() {
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="Phone Number"
                 type="tel"
+                className="rounded border-2 border-slate-300 p-4 font-bold"
+              />
+
+              <input
+                value={promoCode}
+                onChange={(e) => setPromoCode(e.target.value)}
+                placeholder="Gift Voucher or Promo Code (optional)"
                 className="rounded border-2 border-slate-300 p-4 font-bold"
               />
 

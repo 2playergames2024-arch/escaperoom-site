@@ -19,7 +19,10 @@ export default function LocationHeader({
   bookHref,
 }: LocationHeaderProps) {
   const [locationMenuOpen, setLocationMenuOpen] = useState(false);
+  const [navMenuOpen, setNavMenuOpen] = useState(false);
+  const [mobileLocationOpen, setMobileLocationOpen] = useState(false);
   const locationMenuRef = useRef<HTMLDivElement>(null);
+  const navMenuRef = useRef<HTMLDivElement>(null);
 
   const isKingOfPrussia = locationName
     .toLowerCase()
@@ -38,20 +41,35 @@ export default function LocationHeader({
         shortName: "King of Prussia",
         href: "/locations/king-of-prussia",
       };
+  const giftVoucherHref = isKingOfPrussia
+    ? "/gift-vouchers/details?location=king-of-prussia"
+    : "/gift-vouchers/details?location=cherry-hill";
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
+      const clickedNode = event.target as Node;
+
       if (
         locationMenuRef.current &&
-        !locationMenuRef.current.contains(event.target as Node)
+        !locationMenuRef.current.contains(clickedNode)
       ) {
         setLocationMenuOpen(false);
+      }
+
+      if (
+        navMenuRef.current &&
+        !navMenuRef.current.contains(clickedNode)
+      ) {
+        setNavMenuOpen(false);
+        setMobileLocationOpen(false);
       }
     }
 
     function handleEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setLocationMenuOpen(false);
+        setNavMenuOpen(false);
+        setMobileLocationOpen(false);
       }
     }
 
@@ -70,17 +88,108 @@ export default function LocationHeader({
 
         {/* LEFT: LOGO */}
         <Link href="/" className="location-header-logo">
-          ESCAPE ROOM MYSTERY
+          <span>ESCAPE ROOM</span>
+          <span>MYSTERY</span>
         </Link>
 
         {/* CENTER: NAVIGATION */}
-        <nav className="location-header-nav">
-          <Link href={homeHref}>Home</Link>
+        <>
+          <nav className="location-header-nav">
 
-          <Link href={roomsHref}>
-            Explore Rooms
-          </Link>
-        </nav>
+            <div className="desktop-nav">
+              <Link href={homeHref}>Home</Link>
+              <Link href={roomsHref}>Explore Rooms</Link>
+              <Link href={giftVoucherHref}>Gift Vouchers</Link>
+            </div>
+
+            <div
+              ref={navMenuRef}
+              className="location-mobile-nav"
+            >
+              <button
+                type="button"
+                className="hamburger-button"
+                onClick={() => setNavMenuOpen((open) => !open)}
+                aria-label="Menu"
+              >
+                ☰
+              </button>
+
+              {navMenuOpen && (
+                <div className="hamburger-menu">
+
+                  <button
+                    type="button"
+                    className="hamburger-location"
+                    onClick={() =>
+                      setMobileLocationOpen((open) => !open)
+                    }
+                  >
+                    <div className="hamburger-location-title">
+                      {locationName}
+                    </div>
+
+                    <div className="hamburger-location-subtitle">
+                      {locationSubtitle}
+                    </div>
+                  </button>
+
+                  {mobileLocationOpen && (
+                    <div className="mobile-location-menu">
+
+                      <button
+                        type="button"
+                        className="mobile-location-item active"
+                        onClick={() => {
+                          setMobileLocationOpen(false);
+                          setNavMenuOpen(false);
+                        }}
+                      >
+                        ✓ Stay at {currentLocationShortName}
+                      </button>
+
+                      <Link
+                        href={otherLocation.href}
+                        className="mobile-location-item"
+                        onClick={() => {
+                          setMobileLocationOpen(false);
+                          setNavMenuOpen(false);
+                        }}
+                      >
+                        Go to {otherLocation.shortName}
+                      </Link>
+
+                    </div>
+                  )}
+
+                  <Link
+                    href={homeHref}
+                    onClick={() => setNavMenuOpen(false)}
+                  >
+                    Home
+                  </Link>
+
+                  <Link
+                    href={roomsHref}
+                    onClick={() => setNavMenuOpen(false)}
+                  >
+                    Explore Rooms
+                  </Link>
+
+                  <Link
+                    href={giftVoucherHref}
+                    onClick={() => setNavMenuOpen(false)}
+                  >
+                    Gift Vouchers
+                  </Link>
+
+                </div>
+              )}
+            </div>
+
+          </nav>
+     
+        </>
 
         {/* RIGHT: LOCATION + BOOK NOW */}
         <div className="location-header-right">
@@ -160,6 +269,41 @@ export default function LocationHeader({
           background: white;
         }
 
+        .mobile-location-menu {
+          margin: 8px 0 12px;
+          padding-bottom: 12px;
+          border-bottom: 1px solid rgb(226 232 240);
+
+          display: flex;
+          flex-direction: column;
+        }
+
+        .mobile-location-item {
+          display: block;
+          width: 100%;
+          padding: 10px 0;
+
+          border: 0;
+          background: none;
+
+          text-align: left;
+          text-decoration: none;
+
+          color: rgb(15 23 42);
+          font-size: 15px;
+          font-weight: 700;
+
+          cursor: pointer;
+        }
+
+        .mobile-location-item:hover {
+          color: rgb(249 115 22);
+        }
+
+        .mobile-location-item.active {
+          font-weight: 900;
+        }
+
         .location-header-inner {
           display: grid;
           grid-template-columns: 1fr auto 1fr;
@@ -174,7 +318,8 @@ export default function LocationHeader({
 
         .location-header-logo {
           justify-self: start;
-          white-space: nowrap;
+          display: flex;
+          flex-direction: column;
           color: rgb(15 23 42);
           font-size: 18px;
           font-weight: 900;
@@ -182,11 +327,24 @@ export default function LocationHeader({
           text-decoration: none;
         }
 
+        .location-header-logo span {
+          white-space: nowrap;
+        }
+
+        @media (min-width: 1101px) {
+          .location-header-logo {
+            flex-direction: row;
+            gap: 6px;
+          }
+        }
+
         .location-header-nav {
           display: flex;
           justify-self: center;
+          align-self: start;
           align-items: center;
           gap: 34px;
+          padding-top: 2px;
         }
 
         .location-header-nav a {
@@ -322,14 +480,137 @@ export default function LocationHeader({
           line-height: 1.6;
           white-space: normal;
         }
+        
+        .desktop-nav {
+          display: flex;
+          gap: 34px;
+        }
+
+        .location-mobile-nav {
+          display: none;
+          position: relative;
+        }
+
+        .hamburger-button {
+          border: 0;
+          background: transparent;
+          color: rgb(15 23 42);
+          font-size: 28px;
+          font-weight: 900;
+          cursor: pointer;
+        }
+        
+        .hamburger-location-title {
+          font-size: 18px;
+          font-weight: 900;
+          color: rgb(15 23 42);
+          line-height: 1.2;
+        }
+
+        .hamburger-location-subtitle {
+          margin-top: 4px;
+          font-size: 13px;
+          font-weight: 600;
+          color: rgb(100 116 139);
+          line-height: 1.2;
+        }
+
+        .hamburger-location {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-start;
+
+          width: 100%;
+          padding: 0 0 12px 0;
+          margin-bottom: 12px;
+
+          border: 0;
+          border-bottom: 1px solid rgb(226 232 240);
+          background: none;
+
+          cursor: pointer;
+          text-align: left;
+        }
+
+        .hamburger-location:hover {
+          color: rgb(249 115 22);
+        }
+
+        .hamburger-menu {
+          position: absolute;
+          top: calc(100% + 10px);
+          left: 0;
+
+          width: 230px;
+          padding: 16px;
+
+          border: 1px solid rgb(226 232 240);
+          border-radius: 16px;
+          background: white;
+
+          box-shadow:
+            0 20px 25px -5px rgb(0 0 0 / 0.15),
+            0 8px 10px -6px rgb(0 0 0 / 0.1);
+
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+
+        .hamburger-menu a,
+        .hamburger-menu button {
+          display: block;
+          width: 100%;
+          padding: 8px 0;
+
+          border: 0;
+          background: none;
+
+          text-align: left;
+          text-decoration: none;
+
+          color: rgb(15 23 42);
+          font-size: 16px;
+          font-weight: 800;
+
+          cursor: pointer;
+        }
+
 
         @media (max-width: 900px) {
+
           .location-header-inner {
-            grid-template-columns: auto 1fr;
+            grid-template-columns: auto 1fr auto;
           }
 
           .location-header-nav {
+            justify-self: start;
+          }
+
+          .location-header-right {
+            justify-self: end;
+          }
+
+          .location-header-nav {
+            justify-self: start;
+            align-self: center;
+            padding-top: 0;
+          }
+
+          .desktop-nav {
             display: none;
+          }
+
+          .location-mobile-nav {
+            display: block;
+          }
+
+          .location-selector-wrapper {
+            position: absolute;
+            top: 70px;
+            right: 24px;
+            visibility: hidden;
+            pointer-events: none;
           }
 
           .location-header-right {

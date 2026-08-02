@@ -59,7 +59,7 @@ export default function KingOfPrussiaPage() {
               King of Prussia, PA
             </p>
 
-            <h1 className="max-w-full text-5xl font-black leading-[1.05] tracking-tight md:text-6xl xl:whitespace-nowrap xl:text-7xl">
+            <h1 className="max-w-full text-5xl font-black leading-[1.05] tracking-tight md:text-6xl xl:text-7xl">
               Bring your group. We'll handle the fun.
             </h1>
           </div>
@@ -263,8 +263,7 @@ export default function KingOfPrussiaPage() {
               Every Great Gathering Deserves an Unforgettable Adventure.
             </h2>
             <p className="mb-8 text-lg leading-relaxed text-slate-300">
-              Perfect for birthdays, family outings, youth groups, and team building.
-              Planning for 20 or more? Contact us for discounted group pricing.
+              Planning for 20 or more? Contact us and we'll help you plan the perfect event.
             </p>
             <div className="mt-8 flex justify-center lg:justify-start">
               <Link

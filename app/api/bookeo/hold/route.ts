@@ -27,6 +27,7 @@ export async function POST(request: Request) {
     body: JSON.stringify({
       eventId: body.eventId,
       productId: body.productId,
+
       participants: {
         numbers: [
           {
@@ -35,10 +36,27 @@ export async function POST(request: Request) {
           },
         ],
       },
+
+      promotionCodeInput: body.promoCode,
     }),
   });
 
   const data = await response.json();
+    console.log("BOOKEO RESPONSE:");
+    console.dir(data, { depth: null });
+  if (!response.ok) {
+    const message =
+      JSON.stringify(data).toLowerCase().includes("voucher") ||
+      JSON.stringify(data).toLowerCase().includes("promotion") ||
+      JSON.stringify(data).toLowerCase().includes("coupon")
+        ? "Gift voucher or promo code not found."
+        : data.message || data.error || "Could not create booking hold.";
+
+    return NextResponse.json(
+      { message },
+      { status: response.status }
+    );
+  }
 
   const headers: Record<string, string> = {};
   response.headers.forEach((value, key) => {

@@ -8,7 +8,7 @@ export default function PrivacyPolicyPage() {
 
       <main className="mx-auto max-w-4xl px-6 py-12 text-slate-950">
         <h1 className="mb-4 text-4xl font-black">Privacy Policy</h1>
-        <p className="mb-10 font-bold text-slate-600">Effective Date: June 2026</p>
+        <p className="mb-10 font-bold text-slate-600">Effective Date: July 2026</p>
 
         <div className="space-y-7 leading-7">
           <p>
@@ -23,6 +23,10 @@ export default function PrivacyPolicyPage() {
             ["Payment Processing", "Payments made through our website are processed by secure third-party payment providers. Escape Room Mystery does not store complete credit card information on its servers."],
             ["Cookies and Analytics", "Our website may use cookies, pixels, analytics tools, and similar technologies to improve functionality, analyze website usage, and support advertising or marketing efforts."],
             ["Information Sharing", "We do not sell personal information. Information may be shared with trusted third-party service providers when necessary to process reservations, process payments, operate our website, provide customer support, or perform analytics and advertising services."],
+            [
+              "Mobile Information and Text Messaging",
+              "No mobile information will be shared with third parties/affiliates for marketing/promotional purposes. All OPT-IN requests include text messaging originator opt-in data and consent; this information will not be shared with third parties.",
+            ],
             ["Data Retention", "We retain information only as long as reasonably necessary for business operations, legal compliance, dispute resolution, and recordkeeping purposes."],
             ["Data Security", "We take reasonable administrative, technical, and physical measures to help protect personal information. However, no method of electronic transmission or storage can be guaranteed to be completely secure."],
             ["Children's Privacy", "Our services are intended for families and groups; however, personal information should be submitted by a parent, guardian, or responsible adult when making reservations involving minors."],
