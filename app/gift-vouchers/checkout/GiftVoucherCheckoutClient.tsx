@@ -39,9 +39,14 @@ export default function GiftVoucherCheckoutClient() {
     : "/locations/cherry-hill/book-now";
 
   useEffect(() => {
-    if (window.Bookeo?.init) {
-      window.Bookeo.init();
-    }
+    // Give Bookeo a moment to load, then try to init
+    const timer = setTimeout(() => {
+      if (window.Bookeo?.init) {
+        window.Bookeo.init();
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
   }, []);
 
   return (
@@ -60,7 +65,8 @@ export default function GiftVoucherCheckoutClient() {
       />
 
       <main className="min-h-screen bg-white px-6 py-12">
-        {/* The actual #bookeo-widget div is now in page.tsx */}
+        {/* This div must stay here so Bookeo can find it */}
+        <div id="bookeo-widget" className="mx-auto max-w-6xl" />
       </main>
     </>
   );
