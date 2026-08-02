@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect } from "react";
-import Script from "next/script";
 import { useSearchParams } from "next/navigation";
 import LocationHeader from "../../components/LocationHeader";
 
@@ -57,11 +56,6 @@ export default function GiftVoucherCheckoutClient() {
         homeHref={homeHref}
         roomsHref={roomsHref}
         bookHref={bookHref}
-      />
-
-      <Script
-        src="https://bookeo.com/widget.js?a=415686T7W9919DC0FEE2A6&startmode=buyvoucher"
-        strategy="afterInteractive"
       />
 
       <main className="min-h-screen bg-white px-6 py-12">
