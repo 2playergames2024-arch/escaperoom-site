@@ -30,12 +30,13 @@ export default function GiftVoucherCheckoutClient() {
     : "/locations/cherry-hill/book-now";
 
   useEffect(() => {
-    // Clear and inject the official script inside the container
-    const container = document.getElementById("bookeo-widget");
+    const container = document.getElementById("bookeo-container");
     if (!container) return;
 
-    container.innerHTML = ""; // clear any previous content
+    // Clear previous content
+    container.innerHTML = "";
 
+    // Inject the exact same pattern that works on your live site
     const script = document.createElement("script");
     script.type = "text/javascript";
     script.src =
@@ -56,11 +57,8 @@ export default function GiftVoucherCheckoutClient() {
       />
 
       <main className="min-h-screen bg-white px-6 py-12">
-        <div
-          id="bookeo-widget"
-          className="mx-auto max-w-6xl"
-          style={{ minHeight: "800px" }}
-        />
+        {/* This is where the widget will appear — same pattern as your live site */}
+        <div id="bookeo-container" className="mx-auto max-w-6xl" />
       </main>
     </>
   );
