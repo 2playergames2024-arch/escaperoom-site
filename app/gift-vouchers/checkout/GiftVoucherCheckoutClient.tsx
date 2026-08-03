@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import LocationHeader from "../../components/LocationHeader";
 
@@ -29,23 +28,6 @@ export default function GiftVoucherCheckoutClient() {
     ? "/locations/king-of-prussia/book-now"
     : "/locations/cherry-hill/book-now";
 
-  useEffect(() => {
-    const container = document.getElementById("bookeo-container");
-    if (!container) return;
-
-    // Clear previous content
-    container.innerHTML = "";
-
-    // Inject the exact same pattern that works on your live site
-    const script = document.createElement("script");
-    script.type = "text/javascript";
-    script.src =
-      "https://bookeo.com/widget.js?a=415686T7W9919DC0FEE2A6&startmode=buyvoucher";
-    script.async = true;
-
-    container.appendChild(script);
-  }, []);
-
   return (
     <>
       <LocationHeader
@@ -57,8 +39,16 @@ export default function GiftVoucherCheckoutClient() {
       />
 
       <main className="min-h-screen bg-white px-6 py-12">
-        {/* This is where the widget will appear — same pattern as your live site */}
-        <div id="bookeo-container" className="mx-auto max-w-6xl" />
+        <div className="mx-auto max-w-6xl">
+          {/* Bookeo recommended position marker */}
+          <div id="bookeo_position"></div>
+
+          {/* Script placed here so the iframe appears in this exact position */}
+          <script
+            type="text/javascript"
+            src="https://bookeo.com/widget.js?a=415686T7W9919DC0FEE2A6&startmode=buyvoucher"
+          />
+        </div>
       </main>
     </>
   );
