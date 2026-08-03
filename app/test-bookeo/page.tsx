@@ -37,5 +37,5 @@ export default function TestBookeoPage() {
     };
   }, []);
 
-  return <h1>Bookeo Test1</h1>;
+  return <h1>Bookeo Test2</h1>;
 }
