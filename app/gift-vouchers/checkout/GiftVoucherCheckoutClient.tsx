@@ -1,20 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import LocationHeader from "../../components/LocationHeader";
 
-declare global {
-  interface Window {
-    Bookeo?: {
-      init: () => void;
-    };
-  }
-}
-
 export default function GiftVoucherCheckoutClient() {
   const searchParams = useSearchParams();
-  const [mounted, setMounted] = useState(false);
 
   const location =
     searchParams.get("location") === "cherry-hill"
@@ -39,26 +30,19 @@ export default function GiftVoucherCheckoutClient() {
     : "/locations/cherry-hill/book-now";
 
   useEffect(() => {
-    setMounted(true);
+    // Clear and inject the official script inside the container
+    const container = document.getElementById("bookeo-widget");
+    if (!container) return;
 
-    // Load the Bookeo script only on the client
+    container.innerHTML = ""; // clear any previous content
+
     const script = document.createElement("script");
-    script.src = "https://bookeo.com/widget.js?a=415686T7W9919DC0FEE2A6&startmode=buyvoucher";
+    script.type = "text/javascript";
+    script.src =
+      "https://bookeo.com/widget.js?a=415686T7W9919DC0FEE2A6&startmode=buyvoucher";
     script.async = true;
-    document.body.appendChild(script);
 
-    script.onload = () => {
-      if (window.Bookeo?.init) {
-        window.Bookeo.init();
-      }
-    };
-
-    return () => {
-      // cleanup if needed
-      if (script.parentNode) {
-        script.parentNode.removeChild(script);
-      }
-    };
+    container.appendChild(script);
   }, []);
 
   return (
@@ -72,11 +56,10 @@ export default function GiftVoucherCheckoutClient() {
       />
 
       <main className="min-h-screen bg-white px-6 py-12">
-        {/* Always render the container so Bookeo can find it */}
         <div
           id="bookeo-widget"
           className="mx-auto max-w-6xl"
-          suppressHydrationWarning
+          style={{ minHeight: "800px" }}
         />
       </main>
     </>
