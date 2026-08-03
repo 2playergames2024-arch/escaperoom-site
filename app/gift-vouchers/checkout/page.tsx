@@ -1,6 +1,12 @@
 export default function GiftVoucherCheckoutPage() {
   return (
     <main style={{ padding: "40px" }}>
+      <img
+        src="/images/rooms/area51-action-01.jpg"
+        alt="Area 51"
+        style={{ maxWidth: "100%", height: "auto" }}
+      />
+
       <div id="bookeo_position"></div>
 
       <script
