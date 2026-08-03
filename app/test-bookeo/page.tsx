@@ -20,5 +20,23 @@ export default function TestBookeoPage() {
     };
   }, []);
 
-  return <h1>Bookeo Test</h1>;
+  return <h1>Bookeo Test1</h1>;
 }
+
+<script>
+window.addEventListener("load", function () {
+  const scripts = [...document.getElementsByTagName("script")];
+
+  const bookeoScript = scripts.find(s =>
+    s.src.includes("bookeo.com/widget.js")
+  );
+
+  console.log("Bookeo script found:", !!bookeoScript);
+  console.log(bookeoScript);
+
+  console.log(
+    "bookeo_position exists:",
+    !!document.getElementById("bookeo_position")
+  );
+});
+</script>
