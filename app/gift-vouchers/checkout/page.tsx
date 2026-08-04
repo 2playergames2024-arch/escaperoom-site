@@ -1,59 +1,53 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
+import LocationHeader from "../../components/LocationHeader";
 
 export default function GiftVoucherCheckoutPage() {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const hasRun = useRef(false);
+  const searchParams = useSearchParams();
 
-  useEffect(() => {
-    if (hasRun.current) return;
-    hasRun.current = true;
+  const location =
+    searchParams.get("location") === "cherry-hill"
+      ? "cherry-hill"
+      : "king-of-prussia";
 
-    const container = containerRef.current;
-    if (!container) return;
+  const isKingOfPrussia = location === "king-of-prussia";
 
-    console.log("Bookeo inject starting");
+  const locationName = isKingOfPrussia ? "King of Prussia" : "Cherry Hill";
+  const locationSubtitle = isKingOfPrussia ? "Pennsylvania" : "New Jersey";
 
-    // Clear once
-    container.innerHTML = "";
+  const homeHref = isKingOfPrussia
+    ? "/locations/king-of-prussia"
+    : "/locations/cherry-hill";
 
-    const marker = document.createElement("div");
-    marker.id = "bookeo_position";
-    container.appendChild(marker);
+  const roomsHref = isKingOfPrussia
+    ? "/locations/king-of-prussia/rooms"
+    : "/locations/cherry-hill/rooms";
 
-    const script = document.createElement("script");
-    script.type = "text/javascript";
-    script.src =
-      "https://bookeo.com/widget.js?a=415686T7W9919DC0FEE2A6&startmode=buyvoucher";
-    script.async = true;
-
-    script.onload = () => {
-      console.log("Bookeo script onload fired");
-
-      if ((window as any).Bookeo?.init) {
-        console.log("Calling window.Bookeo.init()");
-        (window as any).Bookeo.init();
-      }
-
-      // Check after a short delay
-      setTimeout(() => {
-        const iframes = container.querySelectorAll("iframe").length;
-        console.log("Iframes found:", iframes);
-        console.log("Container content length:", container.innerHTML.length);
-      }, 1500);
-    };
-
-    script.onerror = () => {
-      console.error("Bookeo script failed to load");
-    };
-
-    container.appendChild(script);
-  }, []);
+  const bookHref = isKingOfPrussia
+    ? "/locations/king-of-prussia/book-now"
+    : "/locations/cherry-hill/book-now";
 
   return (
-    <main style={{ padding: "40px", minHeight: "800px" }}>
-      <div ref={containerRef} id="bookeo-container" />
-    </main>
+    <>
+      <LocationHeader
+        locationName={locationName}
+        locationSubtitle={locationSubtitle}
+        homeHref={homeHref}
+        roomsHref={roomsHref}
+        bookHref={bookHref}
+      />
+
+      <main className="min-h-screen bg-white px-4 py-8">
+        <div className="mx-auto max-w-5xl">
+          <iframe
+            src="/bookeo-gift.html"
+            title="Purchase Gift Voucher"
+            className="w-full border-0"
+            style={{ height: "900px", minHeight: "800px" }}
+          />
+        </div>
+      </main>
+    </>
   );
 }
