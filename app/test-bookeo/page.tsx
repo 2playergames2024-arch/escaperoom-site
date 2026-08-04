@@ -27,6 +27,17 @@ export default function TestBookeoPage() {
         "bookeo_position exists:",
         !!document.getElementById("bookeo_position")
       );
+
+      const oldLoadProvider = (window as any).axiomct_loadProvider;
+
+      console.log("axiomct_loadProvider exists:", !!oldLoadProvider);
+
+      if (oldLoadProvider) {
+        (window as any).axiomct_loadProvider = function (...args: any[]) {
+          console.log("axiomct_loadProvider CALLED", args);
+          return oldLoadProvider.apply(this, args);
+        };
+      }
     };
 
     document.body.appendChild(script);
@@ -37,5 +48,5 @@ export default function TestBookeoPage() {
     };
   }, []);
 
-  return <h1>Bookeo Test2</h1>;
+  return <h1>Bookeo Test3</h1>;
 }
