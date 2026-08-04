@@ -4,49 +4,56 @@ import { useEffect } from "react";
 
 export default function GiftVoucherCheckoutPage() {
   useEffect(() => {
-    const div = document.createElement("div");
-    div.id = "bookeo-widget";
-    document.body.appendChild(div);
-
-    (window as any).axiomct_loadProvider = function (...args: any[]) {
-      console.log("axiomct_loadProvider CALLED", args);
-
-      return (window as any).__realLoadProvider.apply(this, args);
-    };
-
-    const script = document.createElement("script");
-    script.src =
-      "https://bookeo.com/widget.js?a=415686T7W9919DC0FEE2A6&startmode=buyvoucher";
-    script.async = true;
-
-    script.onload = () => {
-      (window as any).__realLoadProvider = (window as any).axiomct_loadProvider;
+    const timeout = setTimeout(() => {
+      const div = document.createElement("div");
+      div.id = "bookeo-widget";
+      document.body.appendChild(div);
 
       (window as any).axiomct_loadProvider = function (...args: any[]) {
         console.log("axiomct_loadProvider CALLED", args);
+
         return (window as any).__realLoadProvider.apply(this, args);
       };
 
-      const scripts = [...document.getElementsByTagName("script")];
+      const script = document.createElement("script");
+      script.src =
+        "https://bookeo.com/widget.js?a=415686T7W9919DC0FEE2A6&startmode=buyvoucher";
+      script.async = true;
 
-      const bookeoScript = scripts.find((s) =>
-        s.src.includes("bookeo.com/widget.js")
-      );
+      script.onload = () => {
+        (window as any).__realLoadProvider = (window as any).axiomct_loadProvider;
 
-      console.log("Bookeo script found:", !!bookeoScript);
-      console.log(bookeoScript);
+        (window as any).axiomct_loadProvider = function (...args: any[]) {
+          console.log("axiomct_loadProvider CALLED", args);
+          return (window as any).__realLoadProvider.apply(this, args);
+        };
 
-      console.log(
-        "bookeo_position exists:",
-        !!document.getElementById("bookeo_position")
-      );
-    };
+        const scripts = [...document.getElementsByTagName("script")];
 
-    document.body.appendChild(script);
+        const bookeoScript = scripts.find((s) =>
+          s.src.includes("bookeo.com/widget.js")
+        );
+
+        console.log("Bookeo script found:", !!bookeoScript);
+        console.log(bookeoScript);
+
+        console.log(
+          "bookeo_position exists:",
+          !!document.getElementById("bookeo_position")
+        );
+      };
+
+      document.body.appendChild(script);
+    }, 3000);
 
     return () => {
-      script.remove();
-      div.remove();
+      clearTimeout(timeout);
+
+      document
+        .querySelectorAll('script[src*="bookeo.com/widget.js"]')
+        .forEach((s) => s.remove());
+
+      document.getElementById("bookeo-widget")?.remove();
     };
   }, []);
 
