@@ -50,5 +50,5 @@ export default function TestBookeoPage() {
     };
   }, []);
 
-  return <h1>Bookeo Test3</h1>;
+  return <h1>Bookeo Test4</h1>;
 }
