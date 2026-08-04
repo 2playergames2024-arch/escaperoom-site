@@ -3,6 +3,11 @@
 import { useEffect } from "react";
 
 export default function GiftVoucherCheckoutPage() {
+  "use client";
+
+import { useEffect } from "react";
+
+export default function GiftVoucherCheckoutPage() {
   useEffect(() => {
     const script = document.createElement("script");
     script.src =
@@ -18,6 +23,8 @@ export default function GiftVoucherCheckoutPage() {
 
   return (
     <main style={{ padding: "40px" }}>
+      <h1>Gift Voucher Test 4</h1>
+
       <div id="bookeo_position"></div>
     </main>
   );
