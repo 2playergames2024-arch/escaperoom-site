@@ -8,12 +8,25 @@ export default function TestBookeoPage() {
     div.id = "bookeo-widget";
     document.body.appendChild(div);
 
+    (window as any).axiomct_loadProvider = function (...args: any[]) {
+      console.log("axiomct_loadProvider CALLED", args);
+
+      return (window as any).__realLoadProvider.apply(this, args);
+    };
+
     const script = document.createElement("script");
     script.src =
       "https://bookeo.com/widget.js?a=415686T7W9919DC0FEE2A6&startmode=buyvoucher";
     script.async = true;
 
     script.onload = () => {
+      (window as any).__realLoadProvider = (window as any).axiomct_loadProvider;
+
+      (window as any).axiomct_loadProvider = function (...args: any[]) {
+        console.log("axiomct_loadProvider CALLED", args);
+        return (window as any).__realLoadProvider.apply(this, args);
+      };
+
       const scripts = [...document.getElementsByTagName("script")];
 
       const bookeoScript = scripts.find((s) =>
@@ -27,17 +40,6 @@ export default function TestBookeoPage() {
         "bookeo_position exists:",
         !!document.getElementById("bookeo_position")
       );
-
-      const oldLoadProvider = (window as any).axiomct_loadProvider;
-
-      console.log("axiomct_loadProvider exists:", !!oldLoadProvider);
-
-      if (oldLoadProvider) {
-        (window as any).axiomct_loadProvider = function (...args: any[]) {
-          console.log("axiomct_loadProvider CALLED", args);
-          return oldLoadProvider.apply(this, args);
-        };
-      }
     };
 
     document.body.appendChild(script);
