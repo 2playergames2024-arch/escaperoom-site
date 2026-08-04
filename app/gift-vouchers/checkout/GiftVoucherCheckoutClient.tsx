@@ -38,15 +38,13 @@ export default function GiftVoucherCheckoutClient() {
         bookHref={bookHref}
       />
 
-      <main className="min-h-screen bg-white px-6 py-12">
-        <div className="mx-auto max-w-6xl">
-          {/* Bookeo recommended position marker */}
-          <div id="bookeo_position"></div>
-
-          {/* Script placed here so the iframe appears in this exact position */}
-          <script
-            type="text/javascript"
-            src="https://bookeo.com/widget.js?a=415686T7W9919DC0FEE2A6&startmode=buyvoucher"
+      <main className="min-h-screen bg-white px-4 py-8">
+        <div className="mx-auto max-w-5xl">
+          <iframe
+            src="/bookeo-gift.html"
+            title="Purchase Gift Voucher"
+            className="w-full border-0"
+            style={{ height: "900px", minHeight: "800px" }}
           />
         </div>
       </main>
