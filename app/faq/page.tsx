@@ -1,11 +1,17 @@
 import SupportFooter from "@/app/components/SupportFooter";
 import SupportHeader from "@/app/components/SupportHeader";
+import ReactMarkdown from "react-markdown";
 
 const faqs = [
   {
     question: "Are your escape rooms private?",
     answer:
       "Yes. Every booking at Escape Room Mystery is private to your group. You will never be paired with strangers. Whether you have two players or ten, the adventure is reserved exclusively for your group.",
+  },
+  {
+    question: "What is your cancellation policy?",
+    answer:
+      "We understand that life happens. Traffic, illness, weather, and unexpected schedule changes are all part of life.\n\nIf something comes up, just give us a call **any time before your scheduled game**. We'll work with you to make things right and take care of you. **Whether that means rescheduling your adventure or providing a full refund, we'll help you find the solution that's best for you.**\n\nOur goal is simple: provide an amazing, stress-free experience from the moment you book until the day you play.",
   },
   {
     question: "What ages can participate?",
@@ -21,11 +27,6 @@ const faqs = [
     question: "How much does it cost?",
     answer:
       "Tickets are $35 per player plus applicable taxes. Your final price will always be displayed before payment is completed.",
-  },
-  {
-    question: "What is your cancellation policy?",
-    answer:
-      "We are a small company, and we understand that traffic, illness, weather, and schedule changes happen. Reservations may be changed or cancelled up to 30 minutes before your scheduled game time. Reservations that are not cancelled at least 30 minutes before the scheduled start time, including no-call/no-show reservations, are not eligible for refunds.",
   },
   {
     question: "How many players do you recommend?",
@@ -73,9 +74,22 @@ export default function FAQPage() {
               className="rounded-[18px] border-2 border-slate-950 bg-white p-6 shadow-lg"
             >
               <h2 className="text-2xl font-black">{faq.question}</h2>
-              <p className="mt-4 text-base font-semibold leading-7 text-slate-700">
-                {faq.answer}
-              </p>
+              <div className="mt-4 text-base font-semibold leading-7 text-slate-700">
+                <ReactMarkdown
+                  components={{
+                    p: ({ children }) => (
+                      <p className="mb-4 last:mb-0">{children}</p>
+                    ),
+                    strong: ({ children }) => (
+                      <strong className="font-black text-slate-900">
+                        {children}
+                      </strong>
+                    ),
+                  }}
+                >
+                  {faq.answer}
+                </ReactMarkdown>
+              </div>
             </section>
           ))}
         </div>

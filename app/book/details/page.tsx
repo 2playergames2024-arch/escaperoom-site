@@ -167,7 +167,7 @@ function BookingDetailsPageContent() {
           )}`}
           className="mb-8 inline-block text-sm font-black uppercase text-orange-500"
         >
-          ← Back to times
+          ← Back to Rooms & Times
         </Link>
 
         <div className="grid gap-10 lg:grid-cols-[1fr_420px]">

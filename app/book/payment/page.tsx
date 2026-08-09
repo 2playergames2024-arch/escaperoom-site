@@ -189,11 +189,24 @@ function PaymentPageContent() {
           </div>
         </div>
 
-        <div className="mt-8 rounded bg-slate-100 p-5 text-sm font-bold">
-          <p>Name: {fullName}</p>
-          <p>Email: {email}</p>
-          <p>Phone: {phone}</p>
-          <p className="mt-3 text-xs text-slate-500">Hold ID: {holdId}</p>
+        <div className="mt-8 rounded-lg border-2 border-orange-500 bg-orange-50 p-6">
+          <h2 className="text-2xl font-black text-orange-600">
+            Escape Room Mystery Promise
+          </h2>
+
+          <p className="mt-4 text-lg font-black">
+            Life happens. We've got you covered.
+          </p>
+
+          <p className="mt-2 text-lg font-black">
+            No hassle. No stress.
+          </p>
+
+          <p className="mt-4 text-lg leading-8">
+            If something comes up, just call us{" "}
+            <strong>any time before your scheduled game</strong>.
+            We'll take care of you.
+          </p>
         </div>
 
         {error && (
@@ -215,7 +228,7 @@ function PaymentPageContent() {
           href={`/locations/${location}/book-now`}
           className="mt-6 inline-block text-sm font-black uppercase text-orange-500"
         >
-          ← Start Over
+          ← Change Room, Date, or Time
         </Link>
       </section>
     </main>

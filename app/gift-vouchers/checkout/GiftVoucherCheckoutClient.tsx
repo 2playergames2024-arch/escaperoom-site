@@ -21,12 +21,12 @@ export default function GiftVoucherCheckoutClient() {
     : "/locations/cherry-hill";
 
   const roomsHref = isKingOfPrussia
-    ? "/locations/king-of-prussia/rooms"
-    : "/locations/cherry-hill/rooms";
+    ? "/locations/king-of-prussia#rooms"
+    : "/locations/cherry-hill#rooms";
 
   const bookHref = isKingOfPrussia
-    ? "/locations/king-of-prussia/book-now"
-    : "/locations/cherry-hill/book-now";
+    ? "/locations/king-of-prussia#book-now"
+    : "/locations/cherry-hill#book-now";
 
   return (
     <>
