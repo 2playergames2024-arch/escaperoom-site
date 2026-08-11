@@ -57,6 +57,16 @@ export async function POST(req: Request) {
       .update(rawBody, "utf8")
       .digest("hex")
       .toLowerCase();
+    console.log("WEBHOOK SIGNATURE DIAGNOSTICS", {
+      signatureHeaderPresent: Boolean(receivedSignature),
+      signatureHeaderPrefix: receivedSignature.slice(0, 7),
+      receivedSignatureLength: normalizedSignature.length,
+      calculatedSignatureLength: calculatedSignature.length,
+      rawBodyLength: rawBody.length,
+      signatureKeyLength: signatureKey.trim().length,
+      signatureKeyIsHex: /^[0-9a-fA-F]+$/.test(signatureKey.trim()),
+      signatureKeyByteLength: signatureKeyBytes.length,
+    });
 
     const receivedBuffer = Buffer.from(
       normalizedSignature,
