@@ -68,6 +68,28 @@ export async function POST(req: Request) {
       signatureKeyByteLength: signatureKeyBytes.length,
     });
 
+    const latin1Signature = createHmac(
+      "sha512",
+      signatureKeyBytes
+    )
+      .update(Buffer.from(rawBody, "latin1"))
+      .digest("hex")
+      .toLowerCase();
+
+    const utf8Matches =
+      normalizedSignature === calculatedSignature;
+
+    const latin1Matches =
+      normalizedSignature === latin1Signature;
+
+    console.log("WEBHOOK ENCODING TEST", {
+      utf8Matches,
+      latin1Matches,
+      utf8ByteLength: Buffer.byteLength(rawBody, "utf8"),
+      latin1ByteLength: Buffer.byteLength(rawBody, "latin1"),
+      containsNonAscii: /[^\x00-\x7F]/.test(rawBody),
+    });
+
     const receivedBuffer = Buffer.from(
       normalizedSignature,
       "hex"
