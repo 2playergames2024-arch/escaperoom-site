@@ -1,10 +1,24 @@
 import { NextResponse } from "next/server";
+import { Redis } from "@upstash/redis";
+
+const redis = Redis.fromEnv();
+
+type TrustedBookeoHold = {
+  holdId: string;
+  productId: string;
+  eventId: string;
+  players: string;
+  location: string;
+  total: string;
+  createdAt: number;
+};
 
 type BookingSession = {
   holdId: string;
   productId: string;
   eventId: string;
   players: string;
+  location: string;
   firstName: string;
   lastName: string;
   email: string;
@@ -13,41 +27,122 @@ type BookingSession = {
   createdAt: number;
 };
 
-const bookingSessions = new Map<string, BookingSession>();
-
 export async function POST(req: Request) {
-  const body = await req.json();
+  try {
+    const body = await req.json();
 
-  const sessionId = "ERM-" + Date.now();
+    if (!body.holdId) {
+      return NextResponse.json(
+        { error: "Missing booking hold." },
+        { status: 400 }
+      );
+    }
 
-  bookingSessions.set(sessionId, {
-    holdId: body.holdId,
-    productId: body.productId,
-    eventId: body.eventId,
-    players: body.players,
-    firstName: body.firstName,
-    lastName: body.lastName,
-    email: body.email,
-    phone: body.phone,
-    total: body.total,
-    createdAt: Date.now(),
-  });
+    /*
+     * Retrieve the trusted booking information that our server
+     * saved directly from Bookeo when the hold was created.
+     */
+    const trustedHold = await redis.get<TrustedBookeoHold>(
+      `bookeo-hold:${body.holdId}`
+    );
 
-  return NextResponse.json({ sessionId });
+    if (!trustedHold) {
+      return NextResponse.json(
+        {
+          error:
+            "Booking hold could not be verified. Please select your room and time again.",
+        },
+        { status: 400 }
+      );
+    }
+
+    /*
+     * Make sure the browser is referring to the same booking
+     * that Bookeo gave our server.
+     */
+    if (
+      trustedHold.holdId !== body.holdId ||
+      trustedHold.productId !== body.productId ||
+      trustedHold.eventId !== body.eventId ||
+      trustedHold.players !== String(body.players)
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Booking information could not be verified. Please select your room and time again.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const sessionId =
+      "ERM-" + Date.now() + "-" + crypto.randomUUID().slice(0, 8);
+
+    const session: BookingSession = {
+      holdId: trustedHold.holdId,
+      productId: trustedHold.productId,
+      eventId: trustedHold.eventId,
+      players: trustedHold.players,
+      location: trustedHold.location,
+
+      firstName: body.firstName || "",
+      lastName: body.lastName || "",
+      email: body.email || "",
+      phone: body.phone || "",
+
+      // IMPORTANT:
+      // This total comes from Bookeo's server-side trusted record,
+      // NOT from the customer's browser.
+      total: trustedHold.total,
+
+      createdAt: Date.now(),
+    };
+
+    await redis.set(`booking-session:${sessionId}`, session, {
+      ex: 60 * 60,
+    });
+
+    return NextResponse.json({ sessionId });
+  } catch (error) {
+    console.error("BOOKING SESSION POST ERROR:", error);
+
+    return NextResponse.json(
+      { error: "Could not create booking session." },
+      { status: 500 }
+    );
+  }
 }
 
 export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const sessionId = searchParams.get("sessionId") || "";
+  try {
+    const { searchParams } = new URL(req.url);
+    const sessionId = searchParams.get("sessionId") || "";
 
-  const session = bookingSessions.get(sessionId);
+    if (!sessionId) {
+      return NextResponse.json(
+        { error: "Missing booking session ID." },
+        { status: 400 }
+      );
+    }
 
-  if (!session) {
+    const session = await redis.get<BookingSession>(
+      `booking-session:${sessionId}`
+    );
+
+    if (!session) {
+      return NextResponse.json(
+        { error: "Booking session not found." },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json({ session });
+  } catch (error) {
+    console.error("BOOKING SESSION GET ERROR:", error);
+
     return NextResponse.json(
-      { error: "Booking session not found." },
-      { status: 404 }
+      { error: "Could not retrieve booking session." },
+      { status: 500 }
     );
   }
-
-  return NextResponse.json({ session });
 }

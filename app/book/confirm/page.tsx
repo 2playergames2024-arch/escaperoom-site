@@ -6,58 +6,124 @@ import { useSearchParams } from "next/navigation";
 function ConfirmPageContent() {
   const searchParams = useSearchParams();
 
-  const [status, setStatus] = useState("Finalizing your booking...");
+  const [status, setStatus] = useState("Verifying your payment...");
   const [bookingId, setBookingId] = useState("");
 
   const sessionId = searchParams.get("sessionId") || "";
 
   useEffect(() => {
-    async function finalizeBooking() {
+    async function completeBooking() {
       try {
-        const sessionRes = await fetch(
-          `/api/booking-session?sessionId=${encodeURIComponent(sessionId)}`
-        );
+        /*
+         * STEP 1:
+         * Independently verify the Authorize.net transaction.
+         *
+         * The webhook can sometimes arrive a few seconds after the
+         * customer reaches this page, so retry briefly if necessary.
+         */
+        let paymentVerified = false;
 
-        const sessionJson = await sessionRes.json();
+        for (let attempt = 0; attempt < 10; attempt++) {
+          const verifyRes = await fetch(
+            "/api/authorize/verify-payment",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                sessionId,
+              }),
+            }
+          );
 
-        if (!sessionRes.ok || !sessionJson.session) {
-          setStatus("Payment was received, but booking details were missing. Please contact us.");
+          const verifyData = await verifyRes.json();
+
+          if (verifyRes.ok && verifyData.verified) {
+            paymentVerified = true;
+            break;
+          }
+
+          if (verifyData.pending) {
+            setStatus("Payment received. Verifying your payment...");
+
+            await new Promise((resolve) =>
+              setTimeout(resolve, 2000)
+            );
+
+            continue;
+          }
+
+          console.log(
+            "Payment verification failed:",
+            verifyData
+          );
+
+          setStatus(
+            "We could not verify your payment automatically. Please contact us for assistance."
+          );
           return;
         }
 
+        if (!paymentVerified) {
+          setStatus(
+            "Your payment is still being verified. Please contact us if your confirmation does not arrive shortly."
+          );
+          return;
+        }
+
+        /*
+         * STEP 2:
+         * Payment has now been independently verified.
+         * Ask our protected Bookeo endpoint to finalize the booking.
+         */
+        setStatus("Payment verified. Finalizing your booking...");
+
         const res = await fetch("/api/bookeo/finalize", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(sessionJson.session),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            sessionId,
+          }),
         });
 
         const data = await res.json();
 
         if (!res.ok) {
           console.log("Finalize booking failed:", data);
-          setStatus("Payment was received, but the booking could not be finalized automatically. Please contact us.");
+
+          setStatus(
+            "Your payment was received, but the booking could not be finalized automatically. Please contact us."
+          );
           return;
         }
 
         setBookingId(data?.data?.id || "");
         setStatus("Your booking is confirmed.");
       } catch (error) {
-        console.log("Finalize booking crashed:", error);
-        setStatus("Payment was received, but the booking could not be finalized automatically. Please contact us.");
+        console.log("Complete booking crashed:", error);
+
+        setStatus(
+          "Your payment may have been received, but we could not complete the booking automatically. Please contact us."
+        );
       }
     }
 
     if (sessionId) {
-      finalizeBooking();
+      completeBooking();
     } else {
-      setStatus("Payment was received, but booking session was missing. Please contact us.");
+      setStatus(
+        "Booking session was missing. Please contact us for assistance."
+      );
     }
   }, [sessionId]);
 
   return (
     <main className="min-h-screen bg-white px-6 py-16 text-slate-950">
-      <section className="mx-auto max-w-3xl rounded-[18px] border-2 border-slate-950 p-8 shadow-lg">
-        <p className="text-sm font-black uppercase tracking-[0.2em] text-orange-500">
+      <section className="mx-auto max-w-3xl">
+        <p className="text-sm font-black uppercase tracking-[0.25em] text-orange-500">
           Payment Received
         </p>
 
@@ -77,7 +143,7 @@ function ConfirmPageContent() {
 
 export default function ConfirmPage() {
   return (
-    <Suspense fallback={<main className="p-8">Finalizing your booking...</main>}>
+    <Suspense fallback={<div>Finalizing your booking...</div>}>
       <ConfirmPageContent />
     </Suspense>
   );
