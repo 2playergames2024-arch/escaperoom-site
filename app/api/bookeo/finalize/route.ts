@@ -314,11 +314,11 @@ export async function POST(request: Request) {
      * Do not consider finalization complete unless
      * Bookeo actually supplied a booking ID.
      */
-    const bookingId = String(data?.id || "");
+    const bookingNumber = String(data?.bookingNumber || "");
 
-    if (!bookingId) {
+    if (!bookingNumber) {
       throw new Error(
-        "Bookeo returned success but no booking ID was present."
+        "Bookeo returned success but no booking number was present."
       );
     }
 
@@ -329,7 +329,7 @@ export async function POST(request: Request) {
       `bookeo-finalized:${sessionId}`,
       {
         sessionId,
-        bookingId,
+        bookingId: bookingNumber,
         transactionId: verifiedPayment.transactionId,
         finalizedAt: Date.now(),
       },
