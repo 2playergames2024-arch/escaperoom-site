@@ -28,7 +28,26 @@ type VerifiedPayment = {
   verifiedAt: number;
 };
 
+type OrphanPayment = {
+  sessionId: string;
+  transactionId: string;
+  amount: string;
+  holdId: string;
+  productId: string;
+  eventId: string;
+  players: string;
+  location: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  bookeoError: unknown;
+  createdAt: number;
+  status: "needs_recovery";
+};
+
 export async function POST(request: Request) {
+  let sessionId = "";
   try {
     if (!BOOKEO_API_KEY || !BOOKEO_SECRET_KEY) {
       return NextResponse.json(
@@ -38,7 +57,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const sessionId = String(body.sessionId || "");
+    sessionId = String(body.sessionId || "");
 
     if (!sessionId) {
       return NextResponse.json(
@@ -166,6 +185,36 @@ export async function POST(request: Request) {
         JSON.stringify(data, null, 2)
       );
 
+      // === NEW: save orphan so this case is never lost ===
+      const orphan: OrphanPayment = {
+        sessionId,
+        transactionId: verifiedPayment.transactionId,
+        amount: verifiedPayment.amount,
+        holdId: session.holdId,
+        productId: session.productId,
+        eventId: session.eventId,
+        players: session.players,
+        location: session.location,
+        firstName: session.firstName,
+        lastName: session.lastName,
+        email: session.email,
+        phone: session.phone,
+        bookeoError: data,
+        createdAt: Date.now(),
+        status: "needs_recovery",
+      };
+
+      await redis.set(`orphan-payment:${sessionId}`, orphan, {
+        ex: 60 * 60 * 24 * 30, // keep for 30 days
+      });
+
+      console.error(
+        "ORPHAN PAYMENT SAVED (paid but not booked):",
+        sessionId,
+        verifiedPayment.transactionId
+      );
+      // === end of new code ===
+
       return NextResponse.json(
         {
           status: response.status,
@@ -181,6 +230,50 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error("BOOKEO FINALIZE CRASH:", error);
+
+    // Also try to save an orphan on unexpected crashes
+    // (best-effort — we may not have all data here)
+    try {
+      if (sessionId) {
+        const verifiedPayment = await redis.get<VerifiedPayment>(
+          `verified-payment:${sessionId}`
+        );
+        const session = await redis.get<BookingSession>(
+          `booking-session:${sessionId}`
+        );
+
+        if (verifiedPayment && session) {
+          const orphan: OrphanPayment = {
+            sessionId,
+            transactionId: verifiedPayment.transactionId,
+            amount: verifiedPayment.amount,
+            holdId: session.holdId,
+            productId: session.productId,
+            eventId: session.eventId,
+            players: session.players,
+            location: session.location,
+            firstName: session.firstName,
+            lastName: session.lastName,
+            email: session.email,
+            phone: session.phone,
+            bookeoError: String(error),
+            createdAt: Date.now(),
+            status: "needs_recovery",
+          };
+
+          await redis.set(`orphan-payment:${sessionId}`, orphan, {
+            ex: 60 * 60 * 24 * 30,
+          });
+
+          console.error(
+            "ORPHAN PAYMENT SAVED AFTER CRASH:",
+            sessionId
+          );
+        }
+      }
+    } catch {
+      // swallow — we already failed
+    }
 
     return NextResponse.json(
       {
