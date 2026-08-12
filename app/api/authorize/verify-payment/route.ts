@@ -37,7 +37,8 @@ export async function POST(req: Request) {
     }
 
     const loginId = process.env.AUTHORIZE_LOGIN_ID;
-    const transactionKey = process.env.AUTHORIZE_TRANSACTION_KEY;
+    const transactionKey =
+      process.env.AUTHORIZE_TRANSACTION_KEY;
     const environment =
       process.env.AUTHORIZE_ENVIRONMENT || "production";
 
@@ -68,9 +69,25 @@ export async function POST(req: Request) {
         {
           verified: false,
           pending: true,
-          error: "Payment notification has not arrived yet.",
+          error:
+            "Payment notification has not arrived yet.",
         },
         { status: 202 }
+      );
+    }
+
+    /*
+     * The signed webhook already binds this Authorize.net
+     * transaction ID to this exact ERM booking session.
+     */
+    if (authorizeEvent.sessionId !== sessionId) {
+      return NextResponse.json(
+        {
+          verified: false,
+          error:
+            "Payment notification does not match this booking.",
+        },
+        { status: 403 }
       );
     }
 
@@ -108,7 +125,8 @@ export async function POST(req: Request) {
       return NextResponse.json(
         {
           verified: false,
-          error: "Authorize.net transaction could not be verified.",
+          error:
+            "Authorize.net transaction could not be verified.",
         },
         { status: 400 }
       );
@@ -124,32 +142,32 @@ export async function POST(req: Request) {
       Number.isFinite(actualAmount) &&
       Math.abs(expectedAmount - actualAmount) < 0.001;
 
-    const referenceMatches =
-      String(transaction.refId || "") === sessionId;
-
     const acceptableStatuses = [
       "capturedPendingSettlement",
       "settledSuccessfully",
     ];
 
-    const statusIsValid = acceptableStatuses.includes(
-      String(transaction.transactionStatus || "")
-    );
+    const statusIsValid =
+      acceptableStatuses.includes(
+        String(transaction.transactionStatus || "")
+      );
 
-    if (!amountMatches || !referenceMatches || !statusIsValid) {
+    if (!amountMatches || !statusIsValid) {
       console.error("PAYMENT VERIFICATION FAILED:", {
         sessionId,
-        transactionId: authorizeEvent.transactionId,
+        transactionId:
+          authorizeEvent.transactionId,
         expectedAmount,
         actualAmount,
-        transactionStatus: transaction.transactionStatus,
-        transactionRefId: transaction.refId,
+        transactionStatus:
+          transaction.transactionStatus,
       });
 
       return NextResponse.json(
         {
           verified: false,
-          error: "Payment did not pass verification.",
+          error:
+            "Payment did not pass verification.",
         },
         { status: 400 }
       );
@@ -157,9 +175,11 @@ export async function POST(req: Request) {
 
     const verifiedPayment = {
       sessionId,
-      transactionId: authorizeEvent.transactionId,
+      transactionId:
+        authorizeEvent.transactionId,
       amount: actualAmount.toFixed(2),
-      transactionStatus: transaction.transactionStatus,
+      transactionStatus:
+        transaction.transactionStatus,
       verifiedAt: Date.now(),
     };
 
@@ -173,15 +193,20 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       verified: true,
-      transactionId: authorizeEvent.transactionId,
+      transactionId:
+        authorizeEvent.transactionId,
     });
   } catch (error) {
-    console.error("VERIFY PAYMENT ERROR:", error);
+    console.error(
+      "VERIFY PAYMENT ERROR:",
+      error
+    );
 
     return NextResponse.json(
       {
         verified: false,
-        error: "Payment verification failed.",
+        error:
+          "Payment verification failed.",
       },
       { status: 500 }
     );
