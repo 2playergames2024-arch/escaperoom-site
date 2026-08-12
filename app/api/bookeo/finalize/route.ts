@@ -12,6 +12,8 @@ type BookingSession = {
   eventId: string;
   players: string;
   location: string;
+  date: string;
+  time: string;
   firstName: string;
   lastName: string;
   email: string;
@@ -37,13 +39,15 @@ type OrphanPayment = {
   eventId: string;
   players: string;
   location: string;
+  date: string;
+  time: string;
   firstName: string;
   lastName: string;
   email: string;
   phone: string;
   bookeoError: unknown;
   createdAt: number;
-  status: "needs_recovery";
+  status: "needs_recovery" | "reconciled" | "recovered";
   failureType: "bookeo_rejected" | "uncertain";
 };
 
@@ -278,6 +282,8 @@ export async function POST(request: Request) {
         eventId: session.eventId,
         players: session.players,
         location: session.location,
+        date: session.date,
+        time: session.time,
         firstName: session.firstName,
         lastName: session.lastName,
         email: session.email,
@@ -379,6 +385,8 @@ export async function POST(request: Request) {
             eventId: session.eventId,
             players: session.players,
             location: session.location,
+            date: session.date,
+            time: session.time,
             firstName: session.firstName,
             lastName: session.lastName,
             email: session.email,

@@ -106,6 +106,8 @@ function BookingDetailsPageContent() {
           location,
           productId,
           eventId,
+          date,
+          time,
           players,
           fullName,
           email,

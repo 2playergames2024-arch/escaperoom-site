@@ -9,6 +9,8 @@ type TrustedBookeoHold = {
   eventId: string;
   players: string;
   location: string;
+  date: string;
+  time: string;
   total: string;
   createdAt: number;
 };
@@ -19,6 +21,8 @@ type BookingSession = {
   eventId: string;
   players: string;
   location: string;
+  date: string;
+  time: string;
   firstName: string;
   lastName: string;
   email: string;
@@ -76,7 +80,10 @@ export async function POST(req: Request) {
     }
 
     const sessionId =
-      "ERM-" + Date.now() + "-" + crypto.randomUUID().slice(0, 8);
+      "ERM-" +
+      Date.now() +
+      "-" +
+      crypto.randomUUID().slice(0, 8);
 
     const session: BookingSession = {
       holdId: trustedHold.holdId,
@@ -84,27 +91,38 @@ export async function POST(req: Request) {
       eventId: trustedHold.eventId,
       players: trustedHold.players,
       location: trustedHold.location,
+      date: trustedHold.date,
+      time: trustedHold.time,
 
       firstName: body.firstName || "",
       lastName: body.lastName || "",
       email: body.email || "",
       phone: body.phone || "",
 
-      // IMPORTANT:
-      // This total comes from Bookeo's server-side trusted record,
-      // NOT from the customer's browser.
+      /*
+       * IMPORTANT:
+       * This total comes from Bookeo's server-side trusted
+       * record, NOT from the customer's browser.
+       */
       total: trustedHold.total,
 
       createdAt: Date.now(),
     };
 
-    await redis.set(`booking-session:${sessionId}`, session, {
-      ex: 60 * 60,
-    });
+    await redis.set(
+      `booking-session:${sessionId}`,
+      session,
+      {
+        ex: 60 * 60,
+      }
+    );
 
     return NextResponse.json({ sessionId });
   } catch (error) {
-    console.error("BOOKING SESSION POST ERROR:", error);
+    console.error(
+      "BOOKING SESSION POST ERROR:",
+      error
+    );
 
     return NextResponse.json(
       { error: "Could not create booking session." },
@@ -116,7 +134,8 @@ export async function POST(req: Request) {
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
-    const sessionId = searchParams.get("sessionId") || "";
+    const sessionId =
+      searchParams.get("sessionId") || "";
 
     if (!sessionId) {
       return NextResponse.json(
@@ -138,7 +157,10 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ session });
   } catch (error) {
-    console.error("BOOKING SESSION GET ERROR:", error);
+    console.error(
+      "BOOKING SESSION GET ERROR:",
+      error
+    );
 
     return NextResponse.json(
       { error: "Could not retrieve booking session." },

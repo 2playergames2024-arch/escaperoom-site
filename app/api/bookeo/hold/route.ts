@@ -56,7 +56,9 @@ export async function POST(request: Request) {
         JSON.stringify(data).toLowerCase().includes("promotion") ||
         JSON.stringify(data).toLowerCase().includes("coupon")
           ? "Gift voucher or promo code not found."
-          : data.message || data.error || "Could not create booking hold.";
+          : data.message ||
+            data.error ||
+            "Could not create booking hold.";
 
       return NextResponse.json(
         { message },
@@ -67,8 +69,15 @@ export async function POST(request: Request) {
     const holdId = data.id;
     const trustedTotal = Number(data.totalPayable?.amount);
 
-    if (!holdId || !Number.isFinite(trustedTotal) || trustedTotal <= 0) {
-      console.error("BOOKEO HOLD MISSING VALID PRICE:", data);
+    if (
+      !holdId ||
+      !Number.isFinite(trustedTotal) ||
+      trustedTotal <= 0
+    ) {
+      console.error(
+        "BOOKEO HOLD MISSING VALID PRICE:",
+        data
+      );
 
       return NextResponse.json(
         { error: "Bookeo returned an invalid booking price." },
@@ -76,9 +85,13 @@ export async function POST(request: Request) {
       );
     }
 
-    // Save Bookeo's authoritative price on the server.
-    // The customer's browser will never be trusted to determine
-    // how much Authorize.net should charge.
+    /*
+     * Save Bookeo's authoritative booking information.
+     *
+     * Date and time are retained for later reconciliation
+     * if payment succeeds but booking finalization becomes
+     * uncertain.
+     */
     await redis.set(
       `bookeo-hold:${holdId}`,
       {
@@ -87,6 +100,8 @@ export async function POST(request: Request) {
         eventId: body.eventId,
         players: String(body.players),
         location: body.location,
+        date: String(body.date || ""),
+        time: String(body.time || ""),
         total: trustedTotal.toFixed(2),
         createdAt: Date.now(),
       },
