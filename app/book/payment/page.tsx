@@ -113,7 +113,7 @@ function PaymentPageContent() {
           firstName,
           lastName,
           phone,
-          baseUrl: "https://escaperoom-site-ikgr.vercel.app",
+          baseUrl: window.location.origin,
         }),
       });
 

@@ -211,6 +211,19 @@ export async function POST(request: Request) {
       });
     }
 
+    /*
+    * TEMPORARY ITEM #5 FAILURE TEST
+    * Payment has already been verified at this point.
+    * Force Bookeo finalization to fail so we can test
+    * paid-but-not-booked recovery.
+    */
+    if (process.env.FORCE_BOOKEO_FINALIZE_FAILURE === "true") {
+      throw new Error(
+        "INTENTIONAL TEST FAILURE: Bookeo finalization blocked."
+      );
+    }
+
+
     const url =
       `https://api.bookeo.com/v2/bookings` +
       `?apiKey=${BOOKEO_API_KEY}` +
