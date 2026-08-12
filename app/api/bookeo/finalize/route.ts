@@ -44,6 +44,7 @@ type OrphanPayment = {
   bookeoError: unknown;
   createdAt: number;
   status: "needs_recovery";
+  failureType: "bookeo_rejected" | "uncertain";
 };
 
 type FinalizedBooking = {
@@ -284,6 +285,7 @@ export async function POST(request: Request) {
         bookeoError: data,
         createdAt: Date.now(),
         status: "needs_recovery",
+        failureType: "bookeo_rejected",
       };
 
       await redis.set(
@@ -384,6 +386,7 @@ export async function POST(request: Request) {
             bookeoError: String(error),
             createdAt: Date.now(),
             status: "needs_recovery",
+            failureType: "uncertain",
           };
 
           await redis.set(
