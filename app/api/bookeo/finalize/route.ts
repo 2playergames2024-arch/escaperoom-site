@@ -46,8 +46,18 @@ type OrphanPayment = {
   status: "needs_recovery";
 };
 
+type FinalizedBooking = {
+  sessionId: string;
+  bookingId: string;
+  transactionId: string;
+  finalizedAt: number;
+};
+
 export async function POST(request: Request) {
   let sessionId = "";
+  let lockToken = "";
+  let lockAcquired = false;
+
   try {
     if (!BOOKEO_API_KEY || !BOOKEO_SECRET_KEY) {
       return NextResponse.json(
@@ -67,7 +77,6 @@ export async function POST(request: Request) {
     }
 
     /*
-     * IMPORTANT:
      * Do not trust booking details sent by the browser.
      * Retrieve the real booking session from Redis.
      */
@@ -83,9 +92,30 @@ export async function POST(request: Request) {
     }
 
     /*
+     * IDEMPOTENCY GATE:
+     * If this session has already been finalized,
+     * return the existing Bookeo booking instead of
+     * attempting another booking.
+     */
+    const existingFinalization =
+      await redis.get<FinalizedBooking>(
+        `bookeo-finalized:${sessionId}`
+      );
+
+    if (existingFinalization) {
+      return NextResponse.json({
+        status: 200,
+        data: {
+          id: existingFinalization.bookingId,
+        },
+        alreadyFinalized: true,
+      });
+    }
+
+    /*
      * HARD PAYMENT SECURITY GATE:
-     * Bookeo cannot be finalized unless Authorize.net payment
-     * has already been independently verified by our server.
+     * Bookeo cannot be finalized unless Authorize.net
+     * payment has been independently verified.
      */
     const verifiedPayment = await redis.get<VerifiedPayment>(
       `verified-payment:${sessionId}`
@@ -101,10 +131,6 @@ export async function POST(request: Request) {
       );
     }
 
-    /*
-     * Make sure the verified payment belongs to this exact session
-     * and matches Bookeo's trusted amount.
-     */
     const expectedAmount = Number(session.total);
     const verifiedAmount = Number(verifiedPayment.amount);
 
@@ -121,6 +147,63 @@ export async function POST(request: Request) {
         },
         { status: 403 }
       );
+    }
+
+    /*
+     * ATOMIC FINALIZATION LOCK:
+     *
+     * Redis SET NX means only one request can acquire
+     * this session's finalize lock.
+     *
+     * The expiration prevents a permanently stuck lock
+     * if the server dies unexpectedly.
+     */
+    lockToken = crypto.randomUUID();
+
+    const lockResult = await redis.set(
+      `bookeo-finalize-lock:${sessionId}`,
+      lockToken,
+      {
+        nx: true,
+        ex: 120,
+      }
+    );
+
+    if (lockResult !== "OK") {
+      /*
+       * Another request is currently finalizing this
+       * exact booking. Do not call Bookeo again.
+       */
+      return NextResponse.json(
+        {
+          error: "Booking finalization is already in progress.",
+          retryable: true,
+        },
+        { status: 409 }
+      );
+    }
+
+    lockAcquired = true;
+
+    /*
+     * Check again AFTER obtaining the lock.
+     *
+     * Another request could have completed between our
+     * first finalized check and acquiring the lock.
+     */
+    const finalizedAfterLock =
+      await redis.get<FinalizedBooking>(
+        `bookeo-finalized:${sessionId}`
+      );
+
+    if (finalizedAfterLock) {
+      return NextResponse.json({
+        status: 200,
+        data: {
+          id: finalizedAfterLock.bookingId,
+        },
+        alreadyFinalized: true,
+      });
     }
 
     const url =
@@ -185,7 +268,6 @@ export async function POST(request: Request) {
         JSON.stringify(data, null, 2)
       );
 
-      // === NEW: save orphan so this case is never lost ===
       const orphan: OrphanPayment = {
         sessionId,
         transactionId: verifiedPayment.transactionId,
@@ -204,16 +286,19 @@ export async function POST(request: Request) {
         status: "needs_recovery",
       };
 
-      await redis.set(`orphan-payment:${sessionId}`, orphan, {
-        ex: 60 * 60 * 24 * 30, // keep for 30 days
-      });
+      await redis.set(
+        `orphan-payment:${sessionId}`,
+        orphan,
+        {
+          ex: 60 * 60 * 24 * 30,
+        }
+      );
 
       console.error(
         "ORPHAN PAYMENT SAVED (paid but not booked):",
         sessionId,
         verifiedPayment.transactionId
       );
-      // === end of new code ===
 
       return NextResponse.json(
         {
@@ -224,6 +309,40 @@ export async function POST(request: Request) {
       );
     }
 
+    /*
+     * Bookeo reported success.
+     * Do not consider finalization complete unless
+     * Bookeo actually supplied a booking ID.
+     */
+    const bookingId = String(data?.id || "");
+
+    if (!bookingId) {
+      throw new Error(
+        "Bookeo returned success but no booking ID was present."
+      );
+    }
+
+    /*
+     * Record successful finalization.
+     */
+    await redis.set(
+      `bookeo-finalized:${sessionId}`,
+      {
+        sessionId,
+        bookingId,
+        transactionId: verifiedPayment.transactionId,
+        finalizedAt: Date.now(),
+      },
+      {
+        ex: 60 * 60 * 24 * 90,
+      }
+    );
+
+    /*
+     * A successful booking no longer needs orphan recovery.
+     */
+    await redis.del(`orphan-payment:${sessionId}`);
+
     return NextResponse.json({
       status: response.status,
       data,
@@ -231,13 +350,18 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("BOOKEO FINALIZE CRASH:", error);
 
-    // Also try to save an orphan on unexpected crashes
-    // (best-effort — we may not have all data here)
+    /*
+     * If payment was verified but something unexpected
+     * failed, preserve the booking information for
+     * manual/reconciled recovery.
+     */
     try {
       if (sessionId) {
-        const verifiedPayment = await redis.get<VerifiedPayment>(
-          `verified-payment:${sessionId}`
-        );
+        const verifiedPayment =
+          await redis.get<VerifiedPayment>(
+            `verified-payment:${sessionId}`
+          );
+
         const session = await redis.get<BookingSession>(
           `booking-session:${sessionId}`
         );
@@ -245,7 +369,8 @@ export async function POST(request: Request) {
         if (verifiedPayment && session) {
           const orphan: OrphanPayment = {
             sessionId,
-            transactionId: verifiedPayment.transactionId,
+            transactionId:
+              verifiedPayment.transactionId,
             amount: verifiedPayment.amount,
             holdId: session.holdId,
             productId: session.productId,
@@ -261,9 +386,13 @@ export async function POST(request: Request) {
             status: "needs_recovery",
           };
 
-          await redis.set(`orphan-payment:${sessionId}`, orphan, {
-            ex: 60 * 60 * 24 * 30,
-          });
+          await redis.set(
+            `orphan-payment:${sessionId}`,
+            orphan,
+            {
+              ex: 60 * 60 * 24 * 30,
+            }
+          );
 
           console.error(
             "ORPHAN PAYMENT SAVED AFTER CRASH:",
@@ -271,8 +400,11 @@ export async function POST(request: Request) {
           );
         }
       }
-    } catch {
-      // swallow — we already failed
+    } catch (recoveryError) {
+      console.error(
+        "FAILED TO SAVE ORPHAN AFTER CRASH:",
+        recoveryError
+      );
     }
 
     return NextResponse.json(
@@ -281,5 +413,31 @@ export async function POST(request: Request) {
       },
       { status: 500 }
     );
+  } finally {
+    /*
+     * Release only OUR lock.
+     *
+     * Checking the token prevents this request from
+     * deleting a newer request's lock if our original
+     * 120-second lock expired.
+     */
+    if (lockAcquired && sessionId && lockToken) {
+      try {
+        const lockKey =
+          `bookeo-finalize-lock:${sessionId}`;
+
+        const currentToken =
+          await redis.get<string>(lockKey);
+
+        if (currentToken === lockToken) {
+          await redis.del(lockKey);
+        }
+      } catch (lockError) {
+        console.error(
+          "BOOKEO FINALIZE LOCK RELEASE ERROR:",
+          lockError
+        );
+      }
+    }
   }
 }
