@@ -1,28 +1,47 @@
 import { NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
-import { createHmac, timingSafeEqual } from "crypto";
+import {
+  createHmac,
+  createHash,
+  timingSafeEqual,
+} from "crypto";
 
 const redis = Redis.fromEnv();
 
 export async function POST(req: Request) {
   try {
-    const signatureKey = process.env.AUTHORIZE_SIGNATURE_KEY;
+    const signatureKey =
+      process.env.AUTHORIZE_SIGNATURE_KEY;
 
     if (!signatureKey) {
-      console.error("AUTHORIZE_SIGNATURE_KEY is missing.");
+      console.error(
+        "AUTHORIZE_SIGNATURE_KEY is missing."
+      );
 
       return NextResponse.json(
-        { error: "Webhook verification is not configured." },
+        {
+          error:
+            "Webhook verification is not configured.",
+        },
         { status: 500 }
       );
     }
 
     /*
      * IMPORTANT:
-     * Authorize.net signs the exact raw request body.
-     * Verify it BEFORE parsing or trusting the webhook.
+     * Read the webhook body as raw bytes.
+     * We calculate the HMAC against these exact bytes.
      */
-    const rawBody = await req.text();
+    const rawBodyBuffer = Buffer.from(
+      await req.arrayBuffer()
+    );
+
+    /*
+     * We still need the string later so that we can
+     * parse the verified JSON.
+     */
+    const rawBody =
+      rawBodyBuffer.toString("utf8");
 
     const receivedSignature =
       req.headers.get("x-anet-signature") || "";
@@ -34,111 +53,178 @@ export async function POST(req: Request) {
       );
     }
 
-    const normalizedSignature = receivedSignature
-      .replace(/^sha512=/i, "")
-      .trim()
-      .toLowerCase();
+    const normalizedSignature =
+      receivedSignature
+        .replace(/^sha512=/i, "")
+        .trim()
+        .toLowerCase();
 
-    let signatureKeyBytes: Buffer;
+    const keyHex = signatureKey.trim();
 
-    try {
-      signatureKeyBytes = Buffer.from(signatureKey.trim(), "hex");
-    } catch {
-      return NextResponse.json(
-        { error: "Invalid webhook configuration." },
-        { status: 500 }
-      );
-    }
+    /*
+     * Interpretation A:
+     * Official documented method.
+     *
+     * Convert the 128-character hexadecimal
+     * Signature Key into its 64-byte binary form.
+     */
+    const keyBytesA = Buffer.from(
+      keyHex,
+      "hex"
+    );
 
-    const calculatedSignature = createHmac(
+    const calcA = createHmac(
       "sha512",
-      signatureKeyBytes
+      keyBytesA
     )
-      .update(rawBody, "utf8")
-      .digest("hex")
-      .toLowerCase();
-    console.log("WEBHOOK SIGNATURE DIAGNOSTICS", {
-      signatureHeaderPresent: Boolean(receivedSignature),
-      signatureHeaderPrefix: receivedSignature.slice(0, 7),
-      receivedSignatureLength: normalizedSignature.length,
-      calculatedSignatureLength: calculatedSignature.length,
-      rawBodyLength: rawBody.length,
-      signatureKeyLength: signatureKey.trim().length,
-      signatureKeyIsHex: /^[0-9a-fA-F]+$/.test(signatureKey.trim()),
-      signatureKeyByteLength: signatureKeyBytes.length,
-    });
-
-    const latin1Signature = createHmac(
-      "sha512",
-      signatureKeyBytes
-    )
-      .update(Buffer.from(rawBody, "latin1"))
+      .update(rawBodyBuffer)
       .digest("hex")
       .toLowerCase();
 
-    const utf8Matches =
-      normalizedSignature === calculatedSignature;
+    /*
+     * Interpretation B:
+     * DIAGNOSTIC ONLY.
+     *
+     * Some community implementations use the
+     * 128-character key as a literal string.
+     *
+     * We calculate it only so we can see whether
+     * Authorize.net happens to match it.
+     *
+     * It is NOT used to authorize the webhook.
+     */
+    const calcB = createHmac(
+      "sha512",
+      keyHex
+    )
+      .update(rawBodyBuffer)
+      .digest("hex")
+      .toLowerCase();
 
-    const latin1Matches =
-      normalizedSignature === latin1Signature;
+    /*
+     * Safe diagnostic fingerprints.
+     *
+     * These let us determine whether the body
+     * or key changes between requests without
+     * logging the actual Signature Key.
+     */
+    const bodySha16 = createHash("sha256")
+      .update(rawBodyBuffer)
+      .digest("hex")
+      .slice(0, 16);
 
-    console.log("WEBHOOK ENCODING TEST", {
-      utf8Matches,
-      latin1Matches,
-      utf8ByteLength: Buffer.byteLength(rawBody, "utf8"),
-      latin1ByteLength: Buffer.byteLength(rawBody, "latin1"),
-      containsNonAscii: /[^\x00-\x7F]/.test(rawBody),
+    const keyASha16 = createHash("sha256")
+      .update(keyBytesA)
+      .digest("hex")
+      .slice(0, 16);
+
+    console.log("WEBHOOK DIAGNOSTIC", {
+      bodyLen: rawBodyBuffer.length,
+      bodySha16,
+
+      keyHexLength: keyHex.length,
+      keyIsHex:
+        /^[0-9a-fA-F]+$/.test(keyHex),
+      keyAByteLen: keyBytesA.length,
+      keyASha16,
+
+      receivedFirst16:
+        normalizedSignature.slice(0, 16),
+      receivedLast16:
+        normalizedSignature.slice(-16),
+
+      calcAFirst16:
+        calcA.slice(0, 16),
+      calcALast16:
+        calcA.slice(-16),
+
+      calcBFirst16:
+        calcB.slice(0, 16),
+      calcBLast16:
+        calcB.slice(-16),
+
+      matchA:
+        normalizedSignature === calcA,
+
+      matchB:
+        normalizedSignature === calcB,
+
+      nodeVersion:
+        process.versions?.node || null,
     });
 
+    /*
+     * SECURITY CHECK:
+     *
+     * We continue to trust ONLY Interpretation A,
+     * the documented hex-to-binary Signature Key
+     * method.
+     */
     const receivedBuffer = Buffer.from(
       normalizedSignature,
       "hex"
     );
 
     const calculatedBuffer = Buffer.from(
-      calculatedSignature,
+      calcA,
       "hex"
     );
 
     if (
-      receivedBuffer.length !== calculatedBuffer.length ||
-      !timingSafeEqual(receivedBuffer, calculatedBuffer)
+      receivedBuffer.length !==
+        calculatedBuffer.length ||
+      !timingSafeEqual(
+        receivedBuffer,
+        calculatedBuffer
+      )
     ) {
       console.error(
         "AUTHORIZE.NET WEBHOOK SIGNATURE VERIFICATION FAILED"
       );
 
       return NextResponse.json(
-        { error: "Invalid webhook signature." },
+        {
+          error:
+            "Invalid webhook signature.",
+        },
         { status: 401 }
       );
     }
 
     /*
      * Signature is valid.
-     * Only now do we parse and trust the webhook body.
+     * Only now do we parse and trust the webhook.
      */
     const body = JSON.parse(rawBody);
 
-    const eventType = String(body?.eventType || "");
-    const transactionId = String(body?.payload?.id || "");
+    const eventType = String(
+      body?.eventType || ""
+    );
+
+    const transactionId = String(
+      body?.payload?.id || ""
+    );
+
     const sessionId = String(
       body?.payload?.merchantReferenceId || ""
     );
 
     /*
-     * We only expect the payment event selected in Authorize.net.
+     * We only expect the payment event selected
+     * in Authorize.net.
      */
     if (
       eventType !==
       "net.authorize.payment.authcapture.created"
     ) {
-      return NextResponse.json({ received: true });
+      return NextResponse.json({
+        received: true,
+      });
     }
 
     /*
-     * A test webhook or unrelated transaction may not contain
-     * one of our ERM booking session IDs.
+     * A test webhook or unrelated transaction may
+     * not contain one of our ERM booking session IDs.
      *
      * Acknowledge it, but do not store it.
      */
@@ -147,19 +233,23 @@ export async function POST(req: Request) {
       !sessionId ||
       !sessionId.startsWith("ERM-")
     ) {
-      return NextResponse.json({ received: true });
+      return NextResponse.json({
+        received: true,
+      });
     }
 
     /*
-     * Never allow a webhook to create a relationship with a
-     * booking session that does not actually exist.
+     * Never allow a webhook to create a relationship
+     * with a booking session that does not exist.
      */
     const bookingSession = await redis.get(
       `booking-session:${sessionId}`
     );
 
     if (!bookingSession) {
-      return NextResponse.json({ received: true });
+      return NextResponse.json({
+        received: true,
+      });
     }
 
     await redis.set(
@@ -175,12 +265,20 @@ export async function POST(req: Request) {
       }
     );
 
-    return NextResponse.json({ received: true });
+    return NextResponse.json({
+      received: true,
+    });
   } catch (error) {
-    console.error("AUTHORIZE.NET WEBHOOK ERROR:", error);
+    console.error(
+      "AUTHORIZE.NET WEBHOOK ERROR:",
+      error
+    );
 
     return NextResponse.json(
-      { error: "Webhook processing failed." },
+      {
+        error:
+          "Webhook processing failed.",
+      },
       { status: 500 }
     );
   }
