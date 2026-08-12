@@ -1,10 +1,6 @@
 import { NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
-import {
-  createHmac,
-  createHash,
-  timingSafeEqual,
-} from "crypto";
+import { createHmac, timingSafeEqual } from "crypto";
 
 const redis = Redis.fromEnv();
 
@@ -28,18 +24,12 @@ export async function POST(req: Request) {
     }
 
     /*
-     * IMPORTANT:
-     * Read the webhook body as raw bytes.
-     * We calculate the HMAC against these exact bytes.
+     * Read the exact webhook body bytes before parsing.
      */
     const rawBodyBuffer = Buffer.from(
       await req.arrayBuffer()
     );
 
-    /*
-     * We still need the string later so that we can
-     * parse the verified JSON.
-     */
     const rawBody =
       rawBodyBuffer.toString("utf8");
 
@@ -59,114 +49,46 @@ export async function POST(req: Request) {
         .trim()
         .toLowerCase();
 
-    const keyHex = signatureKey.trim();
-
     /*
-     * Interpretation A:
-     * Official documented method.
-     *
-     * Convert the 128-character hexadecimal
-     * Signature Key into its 64-byte binary form.
+     * IMPORTANT:
+     * Authorize.net's actual webhook signature
+     * matches HMAC-SHA512 when the 128-character
+     * Signature Key is used as the literal key.
      */
-    const keyBytesA = Buffer.from(
-      keyHex,
-      "hex"
-    );
-
-    const calcA = createHmac(
+    const calculatedSignature = createHmac(
       "sha512",
-      keyBytesA
+      signatureKey.trim()
     )
       .update(rawBodyBuffer)
       .digest("hex")
       .toLowerCase();
 
     /*
-     * Interpretation B:
-     * DIAGNOSTIC ONLY.
-     *
-     * Some community implementations use the
-     * 128-character key as a literal string.
-     *
-     * We calculate it only so we can see whether
-     * Authorize.net happens to match it.
-     *
-     * It is NOT used to authorize the webhook.
+     * Validate that the received signature is
+     * properly formatted before converting it.
      */
-    const calcB = createHmac(
-      "sha512",
-      keyHex
-    )
-      .update(rawBodyBuffer)
-      .digest("hex")
-      .toLowerCase();
+    if (
+      !/^[0-9a-f]{128}$/i.test(
+        normalizedSignature
+      )
+    ) {
+      console.error(
+        "AUTHORIZE.NET WEBHOOK SIGNATURE FORMAT INVALID"
+      );
 
-    /*
-     * Safe diagnostic fingerprints.
-     *
-     * These let us determine whether the body
-     * or key changes between requests without
-     * logging the actual Signature Key.
-     */
-    const bodySha16 = createHash("sha256")
-      .update(rawBodyBuffer)
-      .digest("hex")
-      .slice(0, 16);
+      return NextResponse.json(
+        { error: "Invalid webhook signature." },
+        { status: 401 }
+      );
+    }
 
-    const keyASha16 = createHash("sha256")
-      .update(keyBytesA)
-      .digest("hex")
-      .slice(0, 16);
-
-    console.log("WEBHOOK DIAGNOSTIC", {
-      bodyLen: rawBodyBuffer.length,
-      bodySha16,
-
-      keyHexLength: keyHex.length,
-      keyIsHex:
-        /^[0-9a-fA-F]+$/.test(keyHex),
-      keyAByteLen: keyBytesA.length,
-      keyASha16,
-
-      receivedFirst16:
-        normalizedSignature.slice(0, 16),
-      receivedLast16:
-        normalizedSignature.slice(-16),
-
-      calcAFirst16:
-        calcA.slice(0, 16),
-      calcALast16:
-        calcA.slice(-16),
-
-      calcBFirst16:
-        calcB.slice(0, 16),
-      calcBLast16:
-        calcB.slice(-16),
-
-      matchA:
-        normalizedSignature === calcA,
-
-      matchB:
-        normalizedSignature === calcB,
-
-      nodeVersion:
-        process.versions?.node || null,
-    });
-
-    /*
-     * SECURITY CHECK:
-     *
-     * We continue to trust ONLY Interpretation A,
-     * the documented hex-to-binary Signature Key
-     * method.
-     */
     const receivedBuffer = Buffer.from(
       normalizedSignature,
       "hex"
     );
 
     const calculatedBuffer = Buffer.from(
-      calcA,
+      calculatedSignature,
       "hex"
     );
 
@@ -183,17 +105,14 @@ export async function POST(req: Request) {
       );
 
       return NextResponse.json(
-        {
-          error:
-            "Invalid webhook signature.",
-        },
+        { error: "Invalid webhook signature." },
         { status: 401 }
       );
     }
 
     /*
      * Signature is valid.
-     * Only now do we parse and trust the webhook.
+     * Only now do we parse and trust the body.
      */
     const body = JSON.parse(rawBody);
 
@@ -210,8 +129,7 @@ export async function POST(req: Request) {
     );
 
     /*
-     * We only expect the payment event selected
-     * in Authorize.net.
+     * Only process the payment event we expect.
      */
     if (
       eventType !==
@@ -223,10 +141,9 @@ export async function POST(req: Request) {
     }
 
     /*
-     * A test webhook or unrelated transaction may
-     * not contain one of our ERM booking session IDs.
-     *
-     * Acknowledge it, but do not store it.
+     * Test webhooks and unrelated transactions
+     * may not contain one of our ERM session IDs.
+     * Acknowledge them without storing anything.
      */
     if (
       !transactionId ||
@@ -239,8 +156,8 @@ export async function POST(req: Request) {
     }
 
     /*
-     * Never allow a webhook to create a relationship
-     * with a booking session that does not exist.
+     * Only associate an Authorize.net transaction
+     * with a booking session that actually exists.
      */
     const bookingSession = await redis.get(
       `booking-session:${sessionId}`
@@ -252,6 +169,11 @@ export async function POST(req: Request) {
       });
     }
 
+    /*
+     * Store the verified Authorize.net event.
+     * The confirmation flow can now independently
+     * verify the transaction and finalize Bookeo.
+     */
     await redis.set(
       `authorize-event:${sessionId}`,
       {
@@ -276,8 +198,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json(
       {
-        error:
-          "Webhook processing failed.",
+        error: "Webhook processing failed.",
       },
       { status: 500 }
     );
