@@ -21,6 +21,14 @@ export async function POST(req: Request) {
     const transactionKey = process.env.AUTHORIZE_TRANSACTION_KEY;
     const environment =
       process.env.AUTHORIZE_ENVIRONMENT || "production";
+    const siteUrl = process.env.SITE_URL;
+
+    if (!siteUrl) {
+      return NextResponse.json(
+        { error: "SITE_URL is not configured." },
+        { status: 500 }
+      );
+    }
 
     if (!loginId || !transactionKey) {
       return NextResponse.json(
@@ -98,7 +106,7 @@ export async function POST(req: Request) {
         : "https://api.authorize.net/xml/v1/request.api";
 
     const cancelUrl =
-      `${body.baseUrl}/locations/${location}/book-now`;
+      `${siteUrl}/locations/${location}/book-now`;
 
     const payload = {
       getHostedPaymentPageRequest: {
@@ -138,7 +146,7 @@ export async function POST(req: Request) {
               settingValue: JSON.stringify({
                 showReceipt: false,
                 url:
-                  `${body.baseUrl}/book/confirm` +
+                  `${siteUrl}/book/confirm` +
                   `?sessionId=${encodeURIComponent(
                     body.sessionId
                   )}`,
