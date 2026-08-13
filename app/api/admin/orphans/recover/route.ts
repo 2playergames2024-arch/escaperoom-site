@@ -3,7 +3,8 @@ import { Redis } from "@upstash/redis";
 
 const redis = Redis.fromEnv();
 
-const BOOKEO_API_KEY = process.env.BOOKEO_API_KEY;
+const BOOKEO_KOP_API_KEY = process.env.BOOKEO_KOP_API_KEY;
+const BOOKEO_CH_API_KEY = process.env.BOOKEO_CH_API_KEY;
 const BOOKEO_SECRET_KEY = process.env.BOOKEO_SECRET_KEY;
 
 type OrphanPayment = {
@@ -96,16 +97,6 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!BOOKEO_API_KEY || !BOOKEO_SECRET_KEY) {
-      return NextResponse.json(
-        {
-          error:
-            "Bookeo API credentials are missing.",
-        },
-        { status: 500 }
-      );
-    }
-
     const body = await request.json();
 
     const sessionId = String(
@@ -137,6 +128,23 @@ export async function POST(request: Request) {
       );
     }
 
+    const BOOKEO_API_KEY =
+      orphan.location === "cherry-hill"
+        ? BOOKEO_CH_API_KEY
+        : orphan.location === "king-of-prussia"
+          ? BOOKEO_KOP_API_KEY
+          : null;
+
+    if (!BOOKEO_API_KEY || !BOOKEO_SECRET_KEY) {
+      return NextResponse.json(
+        {
+          error:
+            "Missing or invalid Bookeo location/credentials.",
+        },
+        { status: 500 }
+      );
+    }
+
     if (orphan.status !== "needs_recovery") {
       return NextResponse.json(
         {
@@ -153,7 +161,7 @@ export async function POST(request: Request) {
      */
     if (
       orphan.lastReconciliationResult !==
-        "no_match" ||
+      "no_match" ||
       !orphan.lastReconciledAt
     ) {
       return NextResponse.json(
@@ -277,7 +285,7 @@ export async function POST(request: Request) {
     if (
       !authorizeResponse.ok ||
       authorizeData?.messages?.resultCode !==
-        "Ok" ||
+      "Ok" ||
       !authorizeData?.transaction
     ) {
       return NextResponse.json(
@@ -412,9 +420,9 @@ export async function POST(request: Request) {
       bookings.filter((booking) => {
         if (
           booking.productId !==
-            orphan.productId ||
+          orphan.productId ||
           booking.eventId !==
-            orphan.eventId ||
+          orphan.eventId ||
           booking.canceled === true
         ) {
           return false;
@@ -571,12 +579,12 @@ export async function POST(request: Request) {
               orphan.email || "",
             phoneNumbers: orphan.phone
               ? [
-                  {
-                    number:
-                      orphan.phone,
-                    type: "mobile",
-                  },
-                ]
+                {
+                  number:
+                    orphan.phone,
+                  type: "mobile",
+                },
+              ]
               : [],
           },
 

@@ -227,7 +227,7 @@ export default function CherryHillBookNowPage() {
           }
 
           const response = await fetch(
-            `/api/bookeo/availability?productId=${room.productId}&date=${date}`,
+            `/api/bookeo/availability?productId=${room.productId}&date=${date}&location=cherry-hill`,
             {
               cache: "no-store",
             }

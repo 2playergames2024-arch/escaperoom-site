@@ -3,7 +3,8 @@ import { Redis } from "@upstash/redis";
 
 const redis = Redis.fromEnv();
 
-const BOOKEO_API_KEY = process.env.BOOKEO_API_KEY;
+const BOOKEO_KOP_API_KEY = process.env.BOOKEO_KOP_API_KEY;
+const BOOKEO_CH_API_KEY = process.env.BOOKEO_CH_API_KEY;
 const BOOKEO_SECRET_KEY = process.env.BOOKEO_SECRET_KEY;
 
 type OrphanPayment = {
@@ -77,13 +78,6 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!BOOKEO_API_KEY || !BOOKEO_SECRET_KEY) {
-      return NextResponse.json(
-        { error: "Missing Bookeo API credentials." },
-        { status: 500 }
-      );
-    }
-
     const body = await request.json();
     const sessionId = String(body.sessionId || "");
 
@@ -105,6 +99,19 @@ export async function POST(request: Request) {
       );
     }
 
+    const BOOKEO_API_KEY =
+      orphan.location === "cherry-hill"
+        ? BOOKEO_CH_API_KEY
+        : orphan.location === "king-of-prussia"
+          ? BOOKEO_KOP_API_KEY
+          : null;
+
+    if (!BOOKEO_API_KEY || !BOOKEO_SECRET_KEY) {
+      return NextResponse.json(
+        { error: "Missing or invalid Bookeo location/credentials." },
+        { status: 500 }
+      );
+    }
     /*
      * If this session was already successfully finalized,
      * there is nothing left to reconcile.
@@ -240,53 +247,53 @@ export async function POST(request: Request) {
      * This endpoint NEVER creates a new booking.
      */
     if (strongMatches.length !== 1) {
-        const result =
-            strongMatches.length === 0
-            ? "no_match"
-            : "ambiguous";
+      const result =
+        strongMatches.length === 0
+          ? "no_match"
+          : "ambiguous";
 
-        /*
-        * Preserve the reconciliation result.
-        *
-        * A later recovery action may proceed only when
-        * reconciliation explicitly found zero existing
-        * Bookeo bookings matching this paid transaction.
-        */
-        await redis.set(
-            `orphan-payment:${sessionId}`,
-            {
-            ...orphan,
-            lastReconciliationResult: result,
-            lastReconciledAt: Date.now(),
-            eventMatches: eventMatches.length,
-            strongMatches: strongMatches.length,
-            },
-            {
-            ex: 60 * 60 * 24 * 30,
-            }
-        );
+      /*
+      * Preserve the reconciliation result.
+      *
+      * A later recovery action may proceed only when
+      * reconciliation explicitly found zero existing
+      * Bookeo bookings matching this paid transaction.
+      */
+      await redis.set(
+        `orphan-payment:${sessionId}`,
+        {
+          ...orphan,
+          lastReconciliationResult: result,
+          lastReconciledAt: Date.now(),
+          eventMatches: eventMatches.length,
+          strongMatches: strongMatches.length,
+        },
+        {
+          ex: 60 * 60 * 24 * 30,
+        }
+      );
 
-        return NextResponse.json({
-            result,
-            sessionId,
-            eventMatches: eventMatches.length,
-            strongMatches: strongMatches.length,
-            candidates: strongMatches.map((booking) => ({
-            bookingNumber: booking.bookingNumber,
-            eventId: booking.eventId,
-            productId: booking.productId,
-            startTime: booking.startTime,
-            creationTime: booking.creationTime,
-            title: booking.title,
-            players:
-                booking.participants?.numbers?.find(
-                (participant) =>
-                    participant.peopleCategoryId === "Cadults"
-                )?.number ?? null,
-            totalPaid:
-                booking.price?.totalPaid?.amount ?? null,
-            })),
-        });
+      return NextResponse.json({
+        result,
+        sessionId,
+        eventMatches: eventMatches.length,
+        strongMatches: strongMatches.length,
+        candidates: strongMatches.map((booking) => ({
+          bookingNumber: booking.bookingNumber,
+          eventId: booking.eventId,
+          productId: booking.productId,
+          startTime: booking.startTime,
+          creationTime: booking.creationTime,
+          title: booking.title,
+          players:
+            booking.participants?.numbers?.find(
+              (participant) =>
+                participant.peopleCategoryId === "Cadults"
+            )?.number ?? null,
+          totalPaid:
+            booking.price?.totalPaid?.amount ?? null,
+        })),
+      });
     }
 
     const match = strongMatches[0];
@@ -328,16 +335,16 @@ export async function POST(request: Request) {
     );
 
     await redis.set(
-        `orphan-payment:${sessionId}`,
-        {
-            ...orphan,
-            status: "reconciled",
-            reconciledBookingNumber: bookingNumber,
-            reconciledAt: Date.now(),
-        },
-        {
-            ex: 60 * 60 * 24 * 30,
-        }
+      `orphan-payment:${sessionId}`,
+      {
+        ...orphan,
+        status: "reconciled",
+        reconciledBookingNumber: bookingNumber,
+        reconciledAt: Date.now(),
+      },
+      {
+        ex: 60 * 60 * 24 * 30,
+      }
     );
 
     return NextResponse.json({

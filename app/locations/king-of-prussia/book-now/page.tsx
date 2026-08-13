@@ -216,7 +216,7 @@ export default function KingOfPrussiaBookNowPage() {
       await Promise.all(
         rooms.map(async (room) => {
           const response = await fetch(
-            `/api/bookeo/availability?productId=${room.productId}&date=${date}`,
+            `/api/bookeo/availability?productId=${room.productId}&date=${date}&location=king-of-prussia`,
             {
               cache: "no-store",
             }

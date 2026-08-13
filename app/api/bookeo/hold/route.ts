@@ -3,19 +3,27 @@ import { Redis } from "@upstash/redis";
 
 const redis = Redis.fromEnv();
 
-const BOOKEO_API_KEY = process.env.BOOKEO_API_KEY;
+const BOOKEO_KOP_API_KEY = process.env.BOOKEO_KOP_API_KEY;
+const BOOKEO_CH_API_KEY = process.env.BOOKEO_CH_API_KEY;
 const BOOKEO_SECRET_KEY = process.env.BOOKEO_SECRET_KEY;
 
 export async function POST(request: Request) {
-  if (!BOOKEO_API_KEY || !BOOKEO_SECRET_KEY) {
-    return NextResponse.json(
-      { error: "Missing Bookeo API credentials" },
-      { status: 500 }
-    );
-  }
 
   try {
     const body = await request.json();
+    const BOOKEO_API_KEY =
+      body.location === "cherry-hill"
+        ? BOOKEO_CH_API_KEY
+        : body.location === "king-of-prussia"
+          ? BOOKEO_KOP_API_KEY
+          : null;
+
+    if (!BOOKEO_API_KEY || !BOOKEO_SECRET_KEY) {
+      return NextResponse.json(
+        { error: "Missing or invalid Bookeo location/credentials" },
+        { status: 500 }
+      );
+    }
 
     const url =
       `https://api.bookeo.com/v2/holds` +
@@ -53,12 +61,12 @@ export async function POST(request: Request) {
     if (!response.ok) {
       const message =
         JSON.stringify(data).toLowerCase().includes("voucher") ||
-        JSON.stringify(data).toLowerCase().includes("promotion") ||
-        JSON.stringify(data).toLowerCase().includes("coupon")
+          JSON.stringify(data).toLowerCase().includes("promotion") ||
+          JSON.stringify(data).toLowerCase().includes("coupon")
           ? "Gift voucher or promo code not found."
           : data.message ||
-            data.error ||
-            "Could not create booking hold.";
+          data.error ||
+          "Could not create booking hold.";
 
       return NextResponse.json(
         { message },

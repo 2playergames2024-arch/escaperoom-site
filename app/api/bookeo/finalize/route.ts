@@ -3,7 +3,8 @@ import { Redis } from "@upstash/redis";
 
 const redis = Redis.fromEnv();
 
-const BOOKEO_API_KEY = process.env.BOOKEO_API_KEY;
+const BOOKEO_KOP_API_KEY = process.env.BOOKEO_KOP_API_KEY;
+const BOOKEO_CH_API_KEY = process.env.BOOKEO_CH_API_KEY;
 const BOOKEO_SECRET_KEY = process.env.BOOKEO_SECRET_KEY;
 
 type BookingSession = {
@@ -64,12 +65,6 @@ export async function POST(request: Request) {
   let lockAcquired = false;
 
   try {
-    if (!BOOKEO_API_KEY || !BOOKEO_SECRET_KEY) {
-      return NextResponse.json(
-        { error: "Missing Bookeo API credentials" },
-        { status: 500 }
-      );
-    }
 
     const body = await request.json();
     sessionId = String(body.sessionId || "");
@@ -93,6 +88,20 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { error: "Booking session not found." },
         { status: 404 }
+      );
+    }
+
+    const BOOKEO_API_KEY =
+      session.location === "cherry-hill"
+        ? BOOKEO_CH_API_KEY
+        : session.location === "king-of-prussia"
+          ? BOOKEO_KOP_API_KEY
+          : null;
+
+    if (!BOOKEO_API_KEY || !BOOKEO_SECRET_KEY) {
+      return NextResponse.json(
+        { error: "Missing or invalid Bookeo location/credentials" },
+        { status: 500 }
       );
     }
 
@@ -255,11 +264,11 @@ export async function POST(request: Request) {
           emailAddress: session.email || "",
           phoneNumbers: session.phone
             ? [
-                {
-                  number: session.phone,
-                  type: "mobile",
-                },
-              ]
+              {
+                number: session.phone,
+                type: "mobile",
+              },
+            ]
             : [],
         },
 
