@@ -8,11 +8,15 @@ function ConfirmPageContent() {
 
   const [status, setStatus] = useState("Verifying your payment...");
   const [bookingId, setBookingId] = useState("");
+  const [canRetry, setCanRetry] = useState(false);
+  const [retryTrigger, setRetryTrigger] = useState(0);
 
   const sessionId = searchParams.get("sessionId") || "";
 
   useEffect(() => {
     async function completeBooking() {
+      setCanRetry(false);
+
       try {
         /*
          * STEP 1:
@@ -60,15 +64,17 @@ function ConfirmPageContent() {
           );
 
           setStatus(
-            "We could not verify your payment automatically. Please contact us for assistance."
+            "We could not verify your payment automatically. Please try confirming again or contact us for assistance."
           );
+          setCanRetry(true);
           return;
         }
 
         if (!paymentVerified) {
           setStatus(
-            "Your payment is still being verified. Please contact us if your confirmation does not arrive shortly."
+            "Your payment is still being verified. Please try confirming again in a moment or contact us if your confirmation does not arrive shortly."
           );
+          setCanRetry(true);
           return;
         }
 
@@ -95,8 +101,9 @@ function ConfirmPageContent() {
           console.log("Finalize booking failed:", data);
 
           setStatus(
-            "Your payment was received, but the booking could not be finalized automatically. Please contact us."
+            "Your payment was received, but the booking could not be finalized automatically. Please try confirming again or contact us."
           );
+          setCanRetry(true);
           return;
         }
 
@@ -106,19 +113,20 @@ function ConfirmPageContent() {
         console.log("Complete booking crashed:", error);
 
         setStatus(
-          "Your payment may have been received, but we could not complete the booking automatically. Please contact us."
+          "Your payment may have been received, but we could not complete the booking automatically. Please try confirming again or contact us."
         );
+        setCanRetry(true);
       }
     }
 
     if (sessionId) {
       completeBooking();
-    } else {
-      setStatus(
-        "Booking session was missing. Please contact us for assistance."
-      );
     }
-  }, [sessionId]);
+  }, [sessionId, retryTrigger]);
+
+  const displayedStatus = sessionId
+    ? status
+    : "Booking session was missing. Please contact us for assistance.";
 
   return (
     <main className="min-h-screen bg-white px-6 py-16 text-slate-950">
@@ -127,9 +135,34 @@ function ConfirmPageContent() {
           Payment Received
         </p>
 
-        <h1 className="mt-2 text-4xl font-black">Thank you!</h1>
+        <h1 className="mt-2 text-4xl font-black">
+          Thank you!
+        </h1>
 
-        <p className="mt-6 text-lg font-bold">{status}</p>
+        <p className="mt-6 text-lg font-bold">
+          {displayedStatus}
+        </p>
+
+        {canRetry && (
+          <div className="mt-6 flex flex-wrap gap-4">
+            <button
+              type="button"
+              onClick={() =>
+                setRetryTrigger((value) => value + 1)
+              }
+              className="rounded-full bg-orange-500 px-6 py-3 font-black uppercase text-white hover:bg-orange-600"
+            >
+              Retry Confirmation
+            </button>
+
+            <a
+              href="/contact"
+              className="rounded-full border-2 border-slate-950 px-6 py-3 font-black uppercase text-slate-950"
+            >
+              Contact Us
+            </a>
+          </div>
+        )}
 
         {bookingId && (
           <p className="mt-6 text-sm font-bold text-slate-500">

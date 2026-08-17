@@ -9,8 +9,50 @@ const BOOKEO_SECRET_KEY = process.env.BOOKEO_SECRET_KEY;
 
 export async function POST(request: Request) {
 
+  const forwardedFor = request.headers.get("x-forwarded-for");
+
+  const ip =
+    forwardedFor?.split(",")[0]?.trim() ||
+    request.headers.get("x-real-ip") ||
+    "unknown";
+
+  const rateLimitKey = `rate-limit:bookeo-hold:${ip}`;
+
+  const attempts = await redis.incr(rateLimitKey);
+
+  if (attempts === 1) {
+    await redis.expire(rateLimitKey, 600);
+  }
+
+  if (attempts > 5) {
+    return NextResponse.json(
+      {
+        error:
+          "Too many booking attempts. Please wait a few minutes and try again.",
+      },
+      { status: 429 }
+    );
+  }
+
   try {
     const body = await request.json();
+    // IMPORTANT:
+    // Player limits are currently 2–10 for all rooms.
+    // If any room's limits change in the future, update ALL of these:
+    // 1. Bookeo product min/max settings
+    // 2. Customer-facing player selector
+    // 3. This server-side validation
+    // Then test the new minimum, maximum, one below minimum, and one above maximum.
+    const players = Number(body.players);
+
+    if (!Number.isInteger(players) || players < 2 || players > 10) {
+      return NextResponse.json(
+        {
+          error: "Player count must be between 2 and 10.",
+        },
+        { status: 400 }
+      );
+    }
     const BOOKEO_API_KEY =
       body.location === "cherry-hill"
         ? BOOKEO_CH_API_KEY
@@ -26,15 +68,15 @@ export async function POST(request: Request) {
     }
 
     const url =
-      `https://api.bookeo.com/v2/holds` +
-      `?apiKey=${BOOKEO_API_KEY}` +
-      `&secretKey=${BOOKEO_SECRET_KEY}`;
+      `https://api.bookeo.com/v2/holds`;
 
     const response = await fetch(url, {
       method: "POST",
       cache: "no-store",
       headers: {
         "Content-Type": "application/json",
+        "X-Bookeo-apiKey": BOOKEO_API_KEY,
+        "X-Bookeo-secretKey": BOOKEO_SECRET_KEY,
       },
       body: JSON.stringify({
         eventId: body.eventId,
@@ -44,7 +86,7 @@ export async function POST(request: Request) {
           numbers: [
             {
               peopleCategoryId: "Cadults",
-              number: body.players,
+              number: players,
             },
           ],
         },
@@ -106,7 +148,7 @@ export async function POST(request: Request) {
         holdId,
         productId: body.productId,
         eventId: body.eventId,
-        players: String(body.players),
+        players: String(players),
         location: body.location,
         date: String(body.date || ""),
         time: String(body.time || ""),

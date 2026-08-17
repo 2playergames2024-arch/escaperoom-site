@@ -167,7 +167,7 @@ function BookingDetailsPageContent() {
           href={`/locations/${location}/book-now?date=${encodeURIComponent(
             date
           )}`}
-          className="mb-8 inline-block text-sm font-black uppercase text-orange-500"
+          className="mb-8 inline-block text-sm font-black uppercase text-orange-500 focus:outline-none focus:ring-4 focus:ring-orange-300"
         >
           ← Back to Rooms & Times
         </Link>
@@ -220,27 +220,35 @@ function BookingDetailsPageContent() {
 
               <div className="flex items-center justify-center gap-10 p-6">
                 <button
+                  type="button"
+                  aria-label="Remove player"
                   onClick={() =>
                     setPlayers((value) =>
                       Math.max(minimumPlayers, value - 1)
                     )
                   }
-                  className="h-12 w-12 rounded-full border-2 border-orange-500 text-2xl font-black text-orange-500"
+                  className="h-12 w-12 rounded-full border-2 border-orange-500 text-2xl font-black text-orange-500 focus:outline-none focus:ring-4 focus:ring-orange-300"
                 >
                   -
                 </button>
 
-                <div className="text-5xl font-black text-orange-500">
+                <div
+                  className="text-5xl font-black text-orange-500"
+                  aria-live="polite"
+                  aria-label={`${players} players`}
+                >
                   {players}
                 </div>
 
                 <button
+                  type="button"
+                  aria-label="Add player"
                   onClick={() =>
                     setPlayers((value) =>
                       Math.min(seats, value + 1)
                     )
                   }
-                  className="h-12 w-12 rounded-full border-2 border-orange-500 text-2xl font-black text-orange-500"
+                  className="h-12 w-12 rounded-full border-2 border-orange-500 text-2xl font-black text-orange-500 focus:outline-none focus:ring-4 focus:ring-orange-300"
                 >
                   +
                 </button>
@@ -252,38 +260,88 @@ function BookingDetailsPageContent() {
             <h2 className="text-2xl font-black">Contact Information</h2>
 
             <div className="mt-6 grid gap-4">
-              <input
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                placeholder="Full Name"
-                className="rounded border-2 border-slate-300 p-4 font-bold"
-              />
+              <div>
+                <label
+                  htmlFor="fullName"
+                  className="mb-2 block font-bold"
+                >
+                  Full Name
+                </label>
 
-              <input
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="Email"
-                type="email"
-                className="rounded border-2 border-slate-300 p-4 font-bold"
-              />
+                <input
+                  id="fullName"
+                  name="fullName"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  autoComplete="name"
+                  className="w-full rounded border-2 border-slate-300 p-4 font-bold focus:outline-none focus:ring-4 focus:ring-orange-300"
+                />
+              </div>
 
-              <input
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="Phone Number"
-                type="tel"
-                className="rounded border-2 border-slate-300 p-4 font-bold"
-              />
+              <div>
+                <label
+                  htmlFor="email"
+                  className="mb-2 block font-bold"
+                >
+                  Email
+                </label>
 
-              <input
-                value={promoCode}
-                onChange={(e) => setPromoCode(e.target.value)}
-                placeholder="Gift Voucher or Promo Code (optional)"
-                className="rounded border-2 border-slate-300 p-4 font-bold"
-              />
+                <input
+                  id="email"
+                  name="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  type="email"
+                  autoComplete="email"
+                  className="w-full rounded border-2 border-slate-300 p-4 font-bold focus:outline-none focus:ring-4 focus:ring-orange-300"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="phone"
+                  className="mb-2 block font-bold"
+                >
+                  Phone Number
+                </label>
+
+                <input
+                  id="phone"
+                  name="phone"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  type="tel"
+                  autoComplete="tel"
+                  className="w-full rounded border-2 border-slate-300 p-4 font-bold focus:outline-none focus:ring-4 focus:ring-orange-300"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="promoCode"
+                  className="mb-2 block font-bold"
+                >
+                  Gift Voucher or Promo Code
+                  <span className="ml-1 font-normal text-slate-500">
+                    (optional)
+                  </span>
+                </label>
+
+                <input
+                  id="promoCode"
+                  name="promoCode"
+                  value={promoCode}
+                  onChange={(e) => setPromoCode(e.target.value)}
+                  className="w-full rounded border-2 border-slate-300 p-4 font-bold focus:outline-none focus:ring-4 focus:ring-orange-300"
+                />
+              </div>
 
               {error && (
-                <p className="rounded bg-red-100 p-3 text-sm font-bold text-red-700">
+                <p
+                  role="alert"
+                  aria-live="assertive"
+                  className="rounded bg-red-100 p-3 text-sm font-bold text-red-700"
+                >
                   {error}
                 </p>
               )}
@@ -295,8 +353,9 @@ function BookingDetailsPageContent() {
               </div>
 
               <button
+                type="button"
                 onClick={handleContinue}
-                className="mt-4 rounded bg-orange-500 px-8 py-4 font-black uppercase text-white hover:bg-orange-600"
+                className="mt-4 rounded bg-orange-500 px-8 py-4 font-black uppercase text-white hover:bg-orange-600 focus:outline-none focus:ring-4 focus:ring-orange-300"
               >
                 Continue
               </button>

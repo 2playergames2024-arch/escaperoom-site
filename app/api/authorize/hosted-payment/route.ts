@@ -108,6 +108,12 @@ export async function POST(req: Request) {
     const cancelUrl =
       `${siteUrl}/locations/${location}/book-now`;
 
+    console.log("SITE URL:", JSON.stringify(siteUrl));
+    console.log(
+      "AUTHORIZE RETURN URL:",
+      `${siteUrl}/book/confirm?sessionId=${encodeURIComponent(body.sessionId)}`
+    );
+
     const payload = {
       getHostedPaymentPageRequest: {
         merchantAuthentication: {

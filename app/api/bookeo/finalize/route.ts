@@ -235,15 +235,15 @@ export async function POST(request: Request) {
 
     const url =
       `https://api.bookeo.com/v2/bookings` +
-      `?apiKey=${BOOKEO_API_KEY}` +
-      `&secretKey=${BOOKEO_SECRET_KEY}` +
-      `&previousHoldId=${encodeURIComponent(session.holdId)}`;
+      `?previousHoldId=${encodeURIComponent(session.holdId)}`;
 
     const response = await fetch(url, {
       method: "POST",
       cache: "no-store",
       headers: {
         "Content-Type": "application/json",
+        "X-Bookeo-apiKey": BOOKEO_API_KEY,
+        "X-Bookeo-secretKey": BOOKEO_SECRET_KEY,
       },
       body: JSON.stringify({
         productId: session.productId,

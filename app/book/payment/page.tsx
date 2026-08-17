@@ -18,6 +18,7 @@ function PaymentPageContent() {
     location === "cherry-hill"
       ? LOCATIONS.cherryHill
       : LOCATIONS.kingOfPrussia;
+
   const [isPaying, setIsPaying] = useState(false);
   const [error, setError] = useState("");
 
@@ -39,11 +40,9 @@ function PaymentPageContent() {
   const time = searchParams.get("time") || "";
   const players = searchParams.get("players") || "";
   const total = searchParams.get("total") || "";
-  const subtotal = Number(searchParams.get("subtotal") || "0");
   const promotionDiscount = Number(
     searchParams.get("promotionDiscount") || "0"
   );
-  const taxAmount = Number(searchParams.get("tax") || "0");
   const fullName = searchParams.get("fullName") || "";
   const email = searchParams.get("email") || "";
   const phone = searchParams.get("phone") || "";
@@ -57,7 +56,13 @@ function PaymentPageContent() {
   const playerCount = Number(players || "0");
   const finalTotal = Number(total || "0");
   const roomCharge = basePrice * playerCount;
-  const currentTax = roomCharge * 0.10;
+
+  const taxRate =
+    location === "cherry-hill"
+      ? 0.06625
+      : 0.10;
+
+  const currentTax = roomCharge * taxRate;
   const currentTotal = roomCharge + currentTax;
 
   const nameParts = fullName.trim().split(" ");
@@ -91,10 +96,18 @@ function PaymentPageContent() {
       const sessionData = await sessionResponse.json();
 
       if (!sessionResponse.ok) {
-        throw new Error("Could not create booking session.");
+        if (sessionResponse.status === 429) {
+          throw new Error(
+            "Our booking system is temporarily busy. Please wait a few minutes and try again."
+          );
+        }
+
+        throw new Error(
+          "We couldn't start your booking. Please try again. If the problem continues, contact us and we'll be happy to help."
+        );
       }
 
-      const sessionId = sessionData.sessionId;  
+      const sessionId = sessionData.sessionId;
 
       const response = await fetch("/api/authorize/hosted-payment", {
         method: "POST",
@@ -120,7 +133,15 @@ function PaymentPageContent() {
       const data = await response.json();
 
       if (!response.ok || !data.token) {
-        throw new Error(data.error || "Could not start payment.");
+        if (response.status === 429) {
+          throw new Error(
+            "Our payment system is temporarily busy. Please wait a few minutes and try again."
+          );
+        }
+
+        throw new Error(
+          "We couldn't open the secure payment form. Please try again. Your card has not been charged."
+        );
       }
 
       const form = document.createElement("form");
@@ -137,7 +158,11 @@ function PaymentPageContent() {
       document.body.appendChild(form);
       form.submit();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Payment failed.");
+      setError(
+        err instanceof Error
+          ? err.message
+          : "We couldn't start payment. Please try again."
+      );
       setIsPaying(false);
     }
   }
@@ -149,7 +174,9 @@ function PaymentPageContent() {
           Payment
         </p>
 
-        <h1 className="mt-2 text-4xl font-black">Review & Pay</h1>
+        <h1 className="mt-2 text-4xl font-black">
+          Review & Pay
+        </h1>
 
         <div className="mt-8 grid gap-3 text-lg font-bold">
           <p>Room: {room}</p>
@@ -158,9 +185,10 @@ function PaymentPageContent() {
           <p>Players: {players}</p>
 
           <div className="mt-4 border-t-2 border-slate-200 pt-4">
-
             <div className="flex justify-between">
-              <span>${basePrice.toFixed(2)} × {players} players</span>
+              <span>
+                ${basePrice.toFixed(2)} × {players} players
+              </span>
               <span>${roomCharge.toFixed(2)}</span>
             </div>
 
@@ -185,7 +213,6 @@ function PaymentPageContent() {
               <span>Amount Due</span>
               <span>${finalTotal.toFixed(2)}</span>
             </div>
-
           </div>
         </div>
 
@@ -195,7 +222,7 @@ function PaymentPageContent() {
           </h2>
 
           <p className="mt-4 text-lg font-black">
-            Life happens. We've got you covered.
+            Life happens. We&apos;ve got you covered.
           </p>
 
           <p className="mt-2 text-lg font-black">
@@ -205,7 +232,7 @@ function PaymentPageContent() {
           <p className="mt-4 text-lg leading-8">
             If something comes up, just call us{" "}
             <strong>any time before your scheduled game</strong>.
-            We'll take care of you.
+            We&apos;ll take care of you.
           </p>
         </div>
 
@@ -234,6 +261,7 @@ function PaymentPageContent() {
     </main>
   );
 }
+
 export default function PaymentPage() {
   return (
     <Suspense fallback={<main className="p-8">Loading payment...</main>}>

@@ -22,41 +22,41 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-white text-slate-950">
       {/* Header */}
-<header className="sticky top-0 z-50 bg-white border-b border-slate-200">
-  <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-    <Link href="/" className="text-2xl font-black tracking-tight leading-none">
-      <div>ESCAPE ROOM</div>
-      <div>MYSTERY</div>
-    </Link>
+      <header className="sticky top-0 z-50 bg-white border-b border-slate-200">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+          <Link href="/" className="text-2xl font-black tracking-tight leading-none">
+            <div>ESCAPE ROOM</div>
+            <div>MYSTERY</div>
+          </Link>
 
-    <nav className="hidden items-center gap-10 text-sm font-bold uppercase md:flex">
-      <Link
-        href="/locations/king-of-prussia"
-        className="block text-center leading-none"
-      >
-        <div>KING OF</div>
-        <div>PRUSSIA</div>
-      </Link>
+          <nav className="hidden items-center gap-10 text-sm font-bold uppercase md:flex">
+            <Link
+              href="/locations/king-of-prussia"
+              className="block text-center leading-none"
+            >
+              <div>KING OF</div>
+              <div>PRUSSIA</div>
+            </Link>
 
-      <Link
-        href="/locations/cherry-hill"
-        className="block text-center leading-none"
-      >
-        <div>CHERRY</div>
-        <div>HILL</div>
-      </Link>
-    </nav>
+            <Link
+              href="/locations/cherry-hill"
+              className="block text-center leading-none"
+            >
+              <div>CHERRY</div>
+              <div>HILL</div>
+            </Link>
+          </nav>
 
-    <a
-      href="#locations"
-      className="rounded-full bg-orange-500 px-6 py-3 text-center text-sm font-black uppercase leading-none text-white hover:bg-orange-600"
-    >
-      Choose
-      <br />
-      Location
-    </a>
-  </div>
-</header>
+          <a
+            href="#locations"
+            className="rounded-full bg-orange-500 px-6 py-3 text-center text-sm font-black uppercase leading-none text-white hover:bg-orange-600"
+          >
+            Choose
+            <br />
+            Location
+          </a>
+        </div>
+      </header>
 
       {/* Hero */}
       <section className="relative overflow-hidden bg-slate-950 text-white">
@@ -230,22 +230,31 @@ export default function Home() {
       </section>
 
       {/* Events CTA */}
-      <section className="mx-auto grid max-w-7xl items-center gap-10 px-6 py-20 lg:grid-cols-2">
-        <div>
-          <p className="mb-3 text-sm font-black uppercase tracking-[0.25em] text-orange-500">
-            Parties & Private Events
-          </p>
-          <h2 className="mb-5 text-4xl font-black md:text-5xl">
-            Bring Your Group Together
-          </h2>
-          <p className="mb-8 text-lg leading-relaxed text-slate-600">
-            Escape rooms are perfect for birthdays, youth groups, team building,
-            school groups, bachelor/bachelorette parties, and family nights.
-          </p>
-          <Link href="/events" className="rounded-full bg-orange-500 px-8 py-4 font-black uppercase text-white hover:bg-orange-600">
-            Plan Your Event
-          </Link>
-        </div>
+      <section className="mx-auto max-w-7xl px-6 py-20 text-center">
+        <p className="mb-3 text-sm font-black uppercase tracking-[0.25em] text-orange-500">
+          Parties & Private Events
+        </p>
+
+        <h2 className="mb-5 text-4xl font-black md:text-5xl">
+          Bring Your Group Together
+        </h2>
+
+        <p className="mx-auto mb-4 max-w-4xl text-lg leading-relaxed text-slate-600">
+          Escape rooms are perfect for birthdays, youth groups, team building,
+          school groups, bachelor/bachelorette parties, and family nights.
+        </p>
+
+        <p className="mx-auto mb-8 max-w-3xl text-lg leading-relaxed text-slate-600">
+          Contact us to start planning your event. Your event coordinator will
+          email you or give you a call within 24 hours.
+        </p>
+
+        <Link
+          href="/contact"
+          className="inline-block rounded-full bg-orange-500 px-8 py-4 font-black uppercase text-white hover:bg-orange-600"
+        >
+          Plan Your Event
+        </Link>
       </section>
 
       {/* Final CTA */}

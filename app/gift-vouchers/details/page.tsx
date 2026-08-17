@@ -1,5 +1,12 @@
+import type { Metadata } from "next";
 import { Suspense } from "react";
 import GiftVoucherDetailsClient from "./GiftVoucherDetailsClient";
+
+export const metadata: Metadata = {
+  title: "Gift Vouchers",
+  description:
+    "Buy Escape Room Mystery gift vouchers for unforgettable escape room adventures in King of Prussia, PA and Cherry Hill, NJ.",
+};
 
 export default function GiftVoucherDetailsPage() {
   return (

@@ -1,6 +1,13 @@
+import type { Metadata } from "next";
 import SupportFooter from "@/app/components/SupportFooter";
 import SupportHeader from "@/app/components/SupportHeader";
 import ReactMarkdown from "react-markdown";
+
+export const metadata: Metadata = {
+  title: "Frequently Asked Questions",
+  description:
+    "Get answers to common questions about Escape Room Mystery, including private rooms, pricing, age requirements, arrival times, parking, cancellations, and group sizes.",
+};
 
 const faqs = [
   {

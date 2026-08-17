@@ -1,5 +1,12 @@
+import type { Metadata } from "next";
 import SupportHeader from "../components/SupportHeader";
 import SupportFooter from "../components/SupportFooter";
+
+export const metadata: Metadata = {
+  title: "Contact Us",
+  description:
+    "Contact Escape Room Mystery with questions about bookings, parties, team-building events, or our escape rooms in King of Prussia, PA and Cherry Hill, NJ.",
+};
 
 export default function ContactPage() {
   return (
@@ -17,6 +24,21 @@ export default function ContactPage() {
         </p>
 
         <form action="/api/contact" method="POST" style={{ display: "grid", gap: "20px" }}>
+          <input
+            type="text"
+            name="website"
+            tabIndex={-1}
+            autoComplete="off"
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              left: "-9999px",
+              width: "1px",
+              height: "1px",
+              opacity: 0,
+            }}
+          />
+
           <input name="name" required placeholder="Your name" style={fieldStyle} />
           <input name="email" type="email" required placeholder="Your email" style={fieldStyle} />
           <input name="phone" placeholder="Phone number" style={fieldStyle} />

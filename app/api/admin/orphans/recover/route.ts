@@ -371,27 +371,19 @@ export async function POST(request: Request) {
 
     const lookupUrl =
       `https://api.bookeo.com/v2/bookings` +
-      `?apiKey=${encodeURIComponent(
-        BOOKEO_API_KEY
-      )}` +
-      `&secretKey=${encodeURIComponent(
-        BOOKEO_SECRET_KEY
-      )}` +
-      `&startTime=${encodeURIComponent(
-        startTime
-      )}` +
-      `&endTime=${encodeURIComponent(
-        endTime
-      )}` +
-      `&productId=${encodeURIComponent(
-        orphan.productId
-      )}`;
+      `?startTime=${encodeURIComponent(startTime)}` +
+      `&endTime=${encodeURIComponent(endTime)}` +
+      `&productId=${encodeURIComponent(orphan.productId)}`;
 
     const lookupResponse = await fetch(
       lookupUrl,
       {
         method: "GET",
         cache: "no-store",
+        headers: {
+          "X-Bookeo-apiKey": BOOKEO_API_KEY,
+          "X-Bookeo-secretKey": BOOKEO_SECRET_KEY,
+        },
       }
     );
 
@@ -538,13 +530,7 @@ export async function POST(request: Request) {
      * Create the recovery booking.
      */
     const createUrl =
-      `https://api.bookeo.com/v2/bookings` +
-      `?apiKey=${encodeURIComponent(
-        BOOKEO_API_KEY
-      )}` +
-      `&secretKey=${encodeURIComponent(
-        BOOKEO_SECRET_KEY
-      )}`;
+      `https://api.bookeo.com/v2/bookings`;
 
     const bookeoResponse = await fetch(
       createUrl,
@@ -552,8 +538,9 @@ export async function POST(request: Request) {
         method: "POST",
         cache: "no-store",
         headers: {
-          "Content-Type":
-            "application/json",
+          "Content-Type": "application/json",
+          "X-Bookeo-apiKey": BOOKEO_API_KEY,
+          "X-Bookeo-secretKey": BOOKEO_SECRET_KEY,
         },
         body: JSON.stringify({
           productId: orphan.productId,

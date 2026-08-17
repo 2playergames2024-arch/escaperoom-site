@@ -41,7 +41,11 @@ export default function GiftVoucherCheckoutClient() {
       <main className="min-h-screen bg-white px-4 py-8">
         <div className="mx-auto max-w-5xl">
           <iframe
-            src="/bookeo-gift.html"
+            src={
+              isKingOfPrussia
+                ? "/bookeo-gift-kop.html"
+                : "/bookeo-gift-ch.html"
+            }
             title="Purchase Gift Voucher"
             className="w-full border-0"
             style={{ height: "900px", minHeight: "800px" }}

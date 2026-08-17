@@ -41,6 +41,7 @@ export default function LocationHeader({
         shortName: "King of Prussia",
         href: "/locations/king-of-prussia",
       };
+
   const giftVoucherHref = isKingOfPrussia
     ? "/gift-vouchers/details?location=king-of-prussia"
     : "/gift-vouchers/details?location=cherry-hill";
@@ -85,7 +86,6 @@ export default function LocationHeader({
   return (
     <header className="location-header">
       <div className="location-header-inner">
-
         {/* LEFT: LOGO */}
         <Link href="/" className="location-header-logo">
           <span>ESCAPE ROOM</span>
@@ -95,7 +95,6 @@ export default function LocationHeader({
         {/* CENTER: NAVIGATION */}
         <>
           <nav className="location-header-nav">
-
             <div className="desktop-nav">
               <Link href={homeHref}>Home</Link>
               <Link href={roomsHref}>Explore Rooms</Link>
@@ -111,19 +110,25 @@ export default function LocationHeader({
                 className="hamburger-button"
                 onClick={() => setNavMenuOpen((open) => !open)}
                 aria-label="Menu"
+                aria-expanded={navMenuOpen}
+                aria-controls="mobile-navigation-menu"
               >
                 ☰
               </button>
 
               {navMenuOpen && (
-                <div className="hamburger-menu">
-
+                <div
+                  id="mobile-navigation-menu"
+                  className="hamburger-menu"
+                >
                   <button
                     type="button"
                     className="hamburger-location"
                     onClick={() =>
                       setMobileLocationOpen((open) => !open)
                     }
+                    aria-expanded={mobileLocationOpen}
+                    aria-controls="mobile-location-menu"
                   >
                     <div className="hamburger-location-title">
                       {locationName}
@@ -135,8 +140,10 @@ export default function LocationHeader({
                   </button>
 
                   {mobileLocationOpen && (
-                    <div className="mobile-location-menu">
-
+                    <div
+                      id="mobile-location-menu"
+                      className="mobile-location-menu"
+                    >
                       <button
                         type="button"
                         className="mobile-location-item active"
@@ -158,7 +165,6 @@ export default function LocationHeader({
                       >
                         Go to {otherLocation.shortName}
                       </Link>
-
                     </div>
                   )}
 
@@ -182,18 +188,14 @@ export default function LocationHeader({
                   >
                     Gift Vouchers
                   </Link>
-
                 </div>
               )}
             </div>
-
           </nav>
-     
         </>
 
         {/* RIGHT: LOCATION + BOOK NOW */}
         <div className="location-header-right">
-
           {/* LOCATION SELECTOR */}
           <div
             ref={locationMenuRef}
@@ -218,7 +220,6 @@ export default function LocationHeader({
 
             {locationMenuOpen && (
               <div className="location-dropdown">
-
                 <button
                   type="button"
                   onClick={() => setLocationMenuOpen(false)}
@@ -255,7 +256,6 @@ export default function LocationHeader({
           >
             Book Now
           </Link>
-
         </div>
       </div>
 
@@ -480,7 +480,7 @@ export default function LocationHeader({
           line-height: 1.6;
           white-space: normal;
         }
-        
+
         .desktop-nav {
           display: flex;
           gap: 34px;
@@ -499,7 +499,7 @@ export default function LocationHeader({
           font-weight: 900;
           cursor: pointer;
         }
-        
+
         .hamburger-location-title {
           font-size: 18px;
           font-weight: 900;
@@ -576,9 +576,13 @@ export default function LocationHeader({
           cursor: pointer;
         }
 
+        .location-header a:focus-visible,
+        .location-header button:focus-visible {
+          outline: 3px solid rgb(249 115 22);
+          outline-offset: 3px;
+        }
 
         @media (max-width: 900px) {
-
           .location-header-inner {
             grid-template-columns: auto 1fr auto;
           }
