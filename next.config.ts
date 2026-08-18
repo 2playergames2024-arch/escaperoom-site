@@ -23,7 +23,7 @@ const securityHeaders = [
       "camera=(), microphone=(), geolocation=(), browsing-topics=()",
   },
   {
-    key: "Content-Security-Policy-Report-Only",
+    key: "Content-Security-Policy",
     value: [
       "default-src 'self'",
       "script-src 'self' 'unsafe-inline' https://bookeo.com https://*.bookeo.com",
