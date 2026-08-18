@@ -32,6 +32,31 @@ type BookingSession = {
 };
 
 export async function POST(req: Request) {
+  const forwardedFor = req.headers.get("x-forwarded-for");
+
+  const ip =
+    forwardedFor?.split(",")[0]?.trim() ||
+    req.headers.get("x-real-ip") ||
+    "unknown";
+
+  const rateLimitKey = `rate-limit:booking-session:${ip}`;
+
+  const attempts = await redis.incr(rateLimitKey);
+
+  if (attempts === 1) {
+    await redis.expire(rateLimitKey, 600);
+  }
+
+  if (attempts > 5) {
+    return NextResponse.json(
+      {
+        error:
+          "Too many booking attempts. Please wait a few minutes and try again.",
+      },
+      { status: 429 }
+    );
+  }
+
   try {
     const body = await req.json();
 

@@ -14,6 +14,31 @@ type TrustedBookeoHold = {
 };
 
 export async function POST(req: Request) {
+  const forwardedFor = req.headers.get("x-forwarded-for");
+
+  const ip =
+    forwardedFor?.split(",")[0]?.trim() ||
+    req.headers.get("x-real-ip") ||
+    "unknown";
+
+  const rateLimitKey = `rate-limit:hosted-payment:${ip}`;
+
+  const attempts = await redis.incr(rateLimitKey);
+
+  if (attempts === 1) {
+    await redis.expire(rateLimitKey, 600);
+  }
+
+  if (attempts > 5) {
+    return NextResponse.json(
+      {
+        error:
+          "Too many payment attempts. Please wait a few minutes and try again.",
+      },
+      { status: 429 }
+    );
+  }
+
   try {
     const body = await req.json();
 
@@ -111,7 +136,9 @@ export async function POST(req: Request) {
     console.log("SITE URL:", JSON.stringify(siteUrl));
     console.log(
       "AUTHORIZE RETURN URL:",
-      `${siteUrl}/book/confirm?sessionId=${encodeURIComponent(body.sessionId)}`
+      `${siteUrl}/book/confirm?sessionId=${encodeURIComponent(
+        body.sessionId
+      )}`
     );
 
     const payload = {
@@ -131,7 +158,8 @@ export async function POST(req: Request) {
             invoiceNumber:
               "ERM-" + Date.now().toString().slice(-10),
             description:
-              body.description || "Escape Room Mystery booking",
+              body.description ||
+              "Escape Room Mystery booking",
           },
 
           customer: {
@@ -186,7 +214,8 @@ export async function POST(req: Request) {
             },
 
             {
-              settingName: "hostedPaymentBillingAddressOptions",
+              settingName:
+                "hostedPaymentBillingAddressOptions",
               settingValue: JSON.stringify({
                 show: false,
                 required: false,
@@ -194,14 +223,16 @@ export async function POST(req: Request) {
             },
 
             {
-              settingName: "hostedPaymentSecurityOptions",
+              settingName:
+                "hostedPaymentSecurityOptions",
               settingValue: JSON.stringify({
                 captcha: false,
               }),
             },
 
             {
-              settingName: "hostedPaymentCustomerOptions",
+              settingName:
+                "hostedPaymentCustomerOptions",
               settingValue: JSON.stringify({
                 showEmail: true,
                 requiredEmail: true,
@@ -242,11 +273,15 @@ export async function POST(req: Request) {
       token: data.token,
     });
   } catch (error) {
-    console.log("HOSTED PAYMENT ROUTE CRASH:", error);
+    console.log(
+      "HOSTED PAYMENT ROUTE CRASH:",
+      error
+    );
 
     return NextResponse.json(
       {
-        error: "Failed to create hosted payment token.",
+        error:
+          "Failed to create hosted payment token.",
         details:
           error instanceof Error
             ? error.message
