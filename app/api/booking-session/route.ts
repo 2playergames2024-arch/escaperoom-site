@@ -1,51 +1,70 @@
 import { NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
+import { incrementRateLimit } from "@/app/lib/rateLimit";
+import {
+  type BookingSession,
+  type TrustedBookeoHold,
+  isValidBookingSessionId,
+} from "../../lib/booking";
 
 const redis = Redis.fromEnv();
 
-type TrustedBookeoHold = {
-  holdId: string;
-  productId: string;
-  eventId: string;
-  players: string;
-  location: string;
-  date: string;
-  time: string;
-  total: string;
-  createdAt: number;
-};
+function normalizeText(
+  value: unknown,
+  maxLength: number
+) {
+  return String(value || "")
+    .trim()
+    .slice(0, maxLength);
+}
 
-type BookingSession = {
-  holdId: string;
-  productId: string;
-  eventId: string;
-  players: string;
-  location: string;
-  date: string;
-  time: string;
-  firstName: string;
-  lastName: string;
-  email: string;
-  phone: string;
-  total: string;
-  createdAt: number;
-};
+function isValidEmail(value: string) {
+  return (
+    value.length <= 254 &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+  );
+}
+
+function isValidPhone(value: string) {
+  const digits =
+    value.replace(/\D/g, "");
+
+  return (
+    digits.length >= 7 &&
+    digits.length <= 15
+  );
+}
+
+function getClientIp(request: Request) {
+  const forwardedFor =
+    request.headers.get(
+      "x-forwarded-for"
+    );
+
+  return (
+    forwardedFor
+      ?.split(",")[0]
+      ?.trim() ||
+    request.headers.get(
+      "x-real-ip"
+    ) ||
+    "unknown"
+  );
+}
 
 export async function POST(req: Request) {
-  const forwardedFor = req.headers.get("x-forwarded-for");
-
   const ip =
-    forwardedFor?.split(",")[0]?.trim() ||
-    req.headers.get("x-real-ip") ||
-    "unknown";
+    getClientIp(req);
 
-  const rateLimitKey = `rate-limit:booking-session:${ip}`;
+  const rateLimitKey =
+    `rate-limit:booking-session:${ip}`;
 
-  const attempts = await redis.incr(rateLimitKey);
-
-  if (attempts === 1) {
-    await redis.expire(rateLimitKey, 600);
-  }
+  const attempts =
+    await incrementRateLimit(
+      redis,
+      rateLimitKey,
+      600
+    );
 
   if (attempts > 5) {
     return NextResponse.json(
@@ -53,27 +72,100 @@ export async function POST(req: Request) {
         error:
           "Too many booking attempts. Please wait a few minutes and try again.",
       },
-      { status: 429 }
+      {
+        status: 429,
+        headers: {
+          "Retry-After": "600",
+        },
+      }
     );
   }
 
   try {
-    const body = await req.json();
+    const body =
+      await req.json();
 
-    if (!body.holdId) {
+    const holdId =
+      normalizeText(
+        body.holdId,
+        200
+      );
+
+    const firstName =
+      normalizeText(
+        body.firstName,
+        100
+      );
+
+    const lastName =
+      normalizeText(
+        body.lastName,
+        100
+      );
+
+    const email =
+      normalizeText(
+        body.email,
+        254
+      );
+
+    const phone =
+      normalizeText(
+        body.phone,
+        40
+      );
+
+    if (!holdId) {
       return NextResponse.json(
-        { error: "Missing booking hold." },
+        {
+          error:
+            "Missing booking hold.",
+        },
         { status: 400 }
       );
     }
 
-    /*
-     * Retrieve the trusted booking information that our server
-     * saved directly from Bookeo when the hold was created.
-     */
-    const trustedHold = await redis.get<TrustedBookeoHold>(
-      `bookeo-hold:${body.holdId}`
-    );
+    if (
+      !firstName ||
+      !lastName
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Please enter your first and last name.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (
+      !isValidEmail(email)
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Please enter a valid email address.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (
+      !isValidPhone(phone)
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Please enter a valid phone number.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const trustedHold =
+      await redis.get<TrustedBookeoHold>(
+        `bookeo-hold:${holdId}`
+      );
 
     if (!trustedHold) {
       return NextResponse.json(
@@ -85,55 +177,95 @@ export async function POST(req: Request) {
       );
     }
 
-    /*
-     * Make sure the browser is referring to the same booking
-     * that Bookeo gave our server.
-     */
+    const existingSessionId =
+      await redis.get<string>(
+        `booking-session-for-hold:${holdId}`
+      );
+
     if (
-      trustedHold.holdId !== body.holdId ||
-      trustedHold.productId !== body.productId ||
-      trustedHold.eventId !== body.eventId ||
-      trustedHold.players !== String(body.players)
+      existingSessionId
     ) {
-      return NextResponse.json(
-        {
-          error:
-            "Booking information could not be verified. Please select your room and time again.",
-        },
-        { status: 400 }
+      const existingSession =
+        await redis.get<BookingSession>(
+          `booking-session:${existingSessionId}`
+        );
+
+      if (existingSession) {
+        return NextResponse.json({
+          sessionId:
+            existingSessionId,
+        });
+      }
+
+      await redis.del(
+        `booking-session-for-hold:${holdId}`
       );
     }
 
     const sessionId =
-      "ERM-" +
-      Date.now() +
-      "-" +
-      crypto.randomUUID().slice(0, 8);
+      `ERM-${crypto.randomUUID()}`;
 
     const session: BookingSession = {
-      holdId: trustedHold.holdId,
-      productId: trustedHold.productId,
-      eventId: trustedHold.eventId,
-      players: trustedHold.players,
-      location: trustedHold.location,
-      date: trustedHold.date,
-      time: trustedHold.time,
+      sessionId,
 
-      firstName: body.firstName || "",
-      lastName: body.lastName || "",
-      email: body.email || "",
-      phone: body.phone || "",
+      holdId:
+        trustedHold.holdId,
 
-      /*
-       * IMPORTANT:
-       * This total comes from Bookeo's server-side trusted
-       * record, NOT from the customer's browser.
-       */
-      total: trustedHold.total,
+      productId:
+        trustedHold.productId,
 
-      createdAt: Date.now(),
+      eventId:
+        trustedHold.eventId,
+
+      players:
+        trustedHold.players,
+
+      location:
+        trustedHold.location,
+
+      roomSlug:
+        trustedHold.roomSlug,
+
+      roomName:
+        trustedHold.roomName,
+
+      image:
+        trustedHold.image,
+
+      date:
+        trustedHold.date,
+
+      time:
+        trustedHold.time,
+
+      roomCharge:
+        trustedHold.roomCharge,
+
+      promotionDiscount:
+        trustedHold.promotionDiscount,
+
+      tax:
+        trustedHold.tax,
+
+      total:
+        trustedHold.total,
+
+      firstName,
+      lastName,
+      email,
+      phone,
+
+      createdAt:
+        Date.now(),
     };
 
+    /*
+     * Create the session record BEFORE publishing the hold -> session
+     * mapping. This removes the race where another request could observe
+     * a mapping whose session did not exist yet.
+     *
+     * A provisional session that loses the mapping race is deleted below.
+     */
     await redis.set(
       `booking-session:${sessionId}`,
       session,
@@ -142,15 +274,91 @@ export async function POST(req: Request) {
       }
     );
 
-    return NextResponse.json({ sessionId });
+    const mappingResult =
+      await redis.set(
+        `booking-session-for-hold:${holdId}`,
+        sessionId,
+        {
+          nx: true,
+          ex: 60 * 60,
+        }
+      );
+
+    if (
+      mappingResult !== "OK"
+    ) {
+      /*
+       * Another request already owns this hold. Our provisional session
+       * must not remain reachable as a second valid session.
+       */
+      await redis.del(
+        `booking-session:${sessionId}`
+      );
+
+      const claimedSessionId =
+        await redis.get<string>(
+          `booking-session-for-hold:${holdId}`
+        );
+
+      if (
+        claimedSessionId
+      ) {
+        const claimedSession =
+          await redis.get<BookingSession>(
+            `booking-session:${claimedSessionId}`
+          );
+
+        if (claimedSession) {
+          return NextResponse.json({
+            sessionId:
+              claimedSessionId,
+          });
+        }
+
+        /*
+         * With the session-first write order, a mapping without its
+         * session should only be stale/corrupt state. Fail closed rather
+         * than deleting another request's ownership claim.
+         */
+        return NextResponse.json(
+          {
+            error:
+              "Booking session creation is still being resolved. Please try again.",
+            retryable: true,
+          },
+          { status: 409 }
+        );
+      }
+
+      return NextResponse.json(
+        {
+          error:
+            "Could not securely create the booking session. Please try again.",
+          retryable: true,
+        },
+        { status: 409 }
+      );
+    }
+
+    return NextResponse.json({
+      sessionId,
+    });
   } catch (error) {
     console.error(
-      "BOOKING SESSION POST ERROR:",
-      error
+      "Booking session creation failed.",
+      {
+        reason:
+          error instanceof Error
+            ? error.name
+            : "unknown",
+      }
     );
 
     return NextResponse.json(
-      { error: "Could not create booking session." },
+      {
+        error:
+          "Could not create booking session.",
+      },
       { status: 500 }
     );
   }
@@ -158,37 +366,150 @@ export async function POST(req: Request) {
 
 export async function GET(req: Request) {
   try {
-    const { searchParams } = new URL(req.url);
+    const ip =
+      getClientIp(req);
+
+    /*
+     * Payment-page reads are legitimate and may happen
+     * several times during reloads or recovery.
+     *
+     * Keep this comfortably above normal customer use
+     * while preventing unlimited session probing.
+     */
+    const rateLimitKey =
+      `rate-limit:booking-session-get:${ip}`;
+
+    const attempts =
+    await incrementRateLimit(
+      redis,
+      rateLimitKey,
+      600
+    );
+
+    if (attempts > 60) {
+      return NextResponse.json(
+        {
+          error:
+            "Too many booking-session requests. Please wait a few minutes and try again.",
+        },
+        {
+          status: 429,
+          headers: {
+            "Retry-After":
+              "600",
+          },
+        }
+      );
+    }
+
+    const { searchParams } =
+      new URL(req.url);
+
     const sessionId =
-      searchParams.get("sessionId") || "";
+      String(
+        searchParams.get(
+          "sessionId"
+        ) || ""
+      ).trim();
 
     if (!sessionId) {
       return NextResponse.json(
-        { error: "Missing booking session ID." },
+        {
+          error:
+            "Missing booking session ID.",
+        },
         { status: 400 }
       );
     }
 
-    const session = await redis.get<BookingSession>(
-      `booking-session:${sessionId}`
-    );
+    /*
+     * Reject obviously malformed values before
+     * querying Redis.
+     */
+    if (
+      !isValidBookingSessionId(
+        sessionId
+      )
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Invalid booking session ID.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const session =
+      await redis.get<BookingSession>(
+        `booking-session:${sessionId}`
+      );
 
     if (!session) {
       return NextResponse.json(
-        { error: "Booking session not found." },
+        {
+          error:
+            "Booking session not found.",
+        },
         { status: 404 }
       );
     }
 
-    return NextResponse.json({ session });
+    return NextResponse.json({
+      session: {
+        sessionId:
+          session.sessionId,
+
+        location:
+          session.location,
+
+        roomName:
+          session.roomName,
+
+        image:
+          session.image,
+
+        date:
+          session.date,
+
+        time:
+          session.time,
+
+        players:
+          session.players,
+
+        roomCharge:
+          session.roomCharge,
+
+        promotionDiscount:
+          session.promotionDiscount,
+
+        tax:
+          session.tax,
+
+        total:
+          session.total,
+
+        customerName:
+          `${session.firstName} ${session.lastName}`.trim(),
+      },
+    });
   } catch (error) {
     console.error(
-      "BOOKING SESSION GET ERROR:",
-      error
+      "Booking session retrieval failed.",
+      {
+        reason:
+          error instanceof Error
+            ? error.name
+            : "unknown",
+      }
     );
 
     return NextResponse.json(
-      { error: "Could not retrieve booking session." },
+      {
+        error:
+          "Could not retrieve booking session.",
+      },
       { status: 500 }
     );
   }

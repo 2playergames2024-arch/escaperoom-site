@@ -7,11 +7,11 @@ export default function robots(): MetadataRoute.Robots {
       allow: "/",
       disallow: [
         "/api/",
+        "/admin/",
         "/book/",
         "/locations/king-of-prussia/book-now",
         "/locations/cherry-hill/book-now",
         "/gift-vouchers/checkout",
-        "/gift-vouchers/payment",
       ],
     },
     sitemap: "https://escaperoommystery.com/sitemap.xml",

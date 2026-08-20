@@ -1,7 +1,27 @@
-"use client";
-
 import Link from "next/link";
 import Image from "next/image";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title:
+    "Escape Rooms in King of Prussia & Cherry Hill",
+
+  description:
+    "Choose immersive private escape room adventures in King of Prussia, PA or Cherry Hill, NJ at Escape Room Mystery.",
+
+  alternates: {
+    canonical: "/",
+  },
+
+  openGraph: {
+    type: "website",
+    title:
+      "Escape Room Mystery | King of Prussia & Cherry Hill",
+    description:
+      "Private escape room adventures with immersive sets, challenging puzzles, and unforgettable missions.",
+    url: "/",
+  },
+};
 
 const featuredRooms = [
   {

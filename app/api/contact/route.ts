@@ -1,5 +1,6 @@
 import { Resend } from "resend";
 import { Redis } from "@upstash/redis";
+import { incrementRateLimit } from "@/app/lib/rateLimit";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 const redis = Redis.fromEnv();
@@ -15,11 +16,12 @@ export async function POST(request: Request) {
 
     const rateLimitKey = `rate-limit:contact:${ip}`;
 
-    const attempts = await redis.incr(rateLimitKey);
-
-    if (attempts === 1) {
-      await redis.expire(rateLimitKey, 600);
-    }
+    const attempts =
+    await incrementRateLimit(
+      redis,
+      rateLimitKey,
+      600
+    );
 
     if (attempts > 5) {
       return Response.json(

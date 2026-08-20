@@ -1,11 +1,29 @@
 import { NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
+import { incrementRateLimit } from "@/app/lib/rateLimit";
+import {
+  BOOKEO_PEOPLE_CATEGORY_ID,
+  LOCATIONS,
+} from "@/app/data/locations";
+import {
+  getEasternDayBounds,
+} from "@/app/lib/booking";
+
+import { fetchAllBookeoBookingPages } from "@/app/lib/bookeoBookingsPagination";
 
 const redis = Redis.fromEnv();
 
-const BOOKEO_KOP_API_KEY = process.env.BOOKEO_KOP_API_KEY;
-const BOOKEO_CH_API_KEY = process.env.BOOKEO_CH_API_KEY;
-const BOOKEO_SECRET_KEY = process.env.BOOKEO_SECRET_KEY;
+const BOOKEO_KOP_API_KEY =
+  process.env.BOOKEO_KOP_API_KEY;
+
+const BOOKEO_CH_API_KEY =
+  process.env.BOOKEO_CH_API_KEY;
+
+const BOOKEO_SECRET_KEY =
+  process.env.BOOKEO_SECRET_KEY;
+
+const BOOKEO_RECONCILE_TIMEOUT_MS =
+  15_000;
 
 type OrphanPayment = {
   sessionId: string;
@@ -24,8 +42,13 @@ type OrphanPayment = {
   phone: string;
   bookeoError: unknown;
   createdAt: number;
-  status: "needs_recovery" | "reconciled" | "recovered";
-  failureType: "bookeo_rejected" | "uncertain";
+  status:
+    | "needs_recovery"
+    | "reconciled"
+    | "recovered";
+  failureType:
+    | "bookeo_rejected"
+    | "uncertain";
 };
 
 type BookeoBooking = {
@@ -36,12 +59,14 @@ type BookeoBooking = {
   creationTime?: string;
   title?: string;
   canceled?: boolean;
+
   participants?: {
     numbers?: Array<{
       peopleCategoryId?: string;
       number?: number;
     }>;
   };
+
   price?: {
     totalPaid?: {
       amount?: string;
@@ -50,13 +75,59 @@ type BookeoBooking = {
   };
 };
 
-export async function POST(request: Request) {
+export async function POST(
+  request: Request
+) {
   try {
-    const adminSecret = process.env.ADMIN_RECOVERY_SECRET;
+    /*
+     * Protect the administrative endpoint from
+     * unlimited secret-guessing and Bookeo requests.
+     */
+    const forwardedFor =
+      request.headers.get(
+        "x-forwarded-for"
+      );
+
+    const ip =
+      forwardedFor
+        ?.split(",")[0]
+        ?.trim() ||
+      request.headers.get(
+        "x-real-ip"
+      ) ||
+      "unknown";
+
+    const rateLimitKey =
+      `rate-limit:admin-reconcile:${ip}`;
+
+    const attempts =
+    await incrementRateLimit(
+      redis,
+      rateLimitKey,
+      600
+    );
+
+    if (attempts > 20) {
+      return NextResponse.json(
+        {
+          error:
+            "Too many recovery administration requests.",
+        },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": "600",
+          },
+        }
+      );
+    }
+
+    const adminSecret =
+      process.env.ADMIN_RECOVERY_SECRET;
 
     if (!adminSecret) {
       console.error(
-        "ADMIN_RECOVERY_SECRET is not configured."
+        "Recovery administration is not configured."
       );
 
       return NextResponse.json(
@@ -69,71 +140,123 @@ export async function POST(request: Request) {
     }
 
     const suppliedSecret =
-      request.headers.get("x-admin-secret");
+      request.headers.get(
+        "x-admin-secret"
+      );
 
-    if (suppliedSecret !== adminSecret) {
+    if (
+      suppliedSecret !==
+      adminSecret
+    ) {
       return NextResponse.json(
-        { error: "Unauthorized." },
+        {
+          error:
+            "Unauthorized.",
+        },
         { status: 401 }
       );
     }
 
-    const body = await request.json();
-    const sessionId = String(body.sessionId || "");
+    const body =
+      await request.json();
+
+    const sessionId =
+      String(
+        body.sessionId || ""
+      ).trim();
 
     if (!sessionId) {
       return NextResponse.json(
-        { error: "Missing booking session ID." },
+        {
+          error:
+            "Missing booking session ID.",
+        },
         { status: 400 }
       );
     }
 
-    const orphan = await redis.get<OrphanPayment>(
-      `orphan-payment:${sessionId}`
-    );
+    if (
+      sessionId.length > 100 ||
+      !/^ERM-[0-9a-f-]+$/i.test(
+        sessionId
+      )
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Invalid booking session ID.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const orphan =
+      await redis.get<OrphanPayment>(
+        `orphan-payment:${sessionId}`
+      );
 
     if (!orphan) {
       return NextResponse.json(
-        { error: "Orphan payment not found." },
+        {
+          error:
+            "Orphan payment not found.",
+        },
         { status: 404 }
       );
     }
 
     const BOOKEO_API_KEY =
-      orphan.location === "cherry-hill"
+      orphan.location ===
+      LOCATIONS.cherryHill.slug
         ? BOOKEO_CH_API_KEY
-        : orphan.location === "king-of-prussia"
+        : orphan.location ===
+            LOCATIONS.kingOfPrussia.slug
           ? BOOKEO_KOP_API_KEY
           : null;
 
-    if (!BOOKEO_API_KEY || !BOOKEO_SECRET_KEY) {
+    if (
+      !BOOKEO_API_KEY ||
+      !BOOKEO_SECRET_KEY
+    ) {
       return NextResponse.json(
-        { error: "Missing or invalid Bookeo location/credentials." },
+        {
+          error:
+            "Missing or invalid Bookeo location/credentials.",
+        },
         { status: 500 }
       );
     }
-    /*
-     * If this session was already successfully finalized,
-     * there is nothing left to reconcile.
-     */
-    const existingFinalization = await redis.get<{
-      sessionId: string;
-      bookingId: string;
-      transactionId: string;
-      finalizedAt: number;
-    }>(`bookeo-finalized:${sessionId}`);
 
-    if (existingFinalization) {
+    /*
+     * If this session has already been finalized,
+     * reconciliation is unnecessary.
+     */
+    const existingFinalization =
+      await redis.get<{
+        sessionId: string;
+        bookingId: string;
+        transactionId: string;
+        finalizedAt: number;
+      }>(
+        `bookeo-finalized:${sessionId}`
+      );
+
+    if (
+      existingFinalization
+    ) {
       return NextResponse.json({
-        result: "already_finalized",
-        bookingNumber: existingFinalization.bookingId,
+        result:
+          "already_finalized",
+        bookingNumber:
+          existingFinalization.bookingId,
       });
     }
 
     if (!orphan.date) {
       return NextResponse.json(
         {
-          result: "manual_review_required",
+          result:
+            "manual_review_required",
           error:
             "Orphan does not contain a booking date.",
         },
@@ -142,172 +265,240 @@ export async function POST(request: Request) {
     }
 
     /*
-     * Query Bookeo for bookings on the scheduled date
-     * for this exact product.
+     * Query Bookeo for bookings on the
+     * scheduled date for this exact product.
      *
-     * Bookeo documents -00:00 as meaning the Bookeo
-     * account's local timezone.
+     * This endpoint NEVER creates a booking.
      */
-    const startTime =
-      `${orphan.date}T00:00:00-00:00`;
-
-    const endTime =
-      `${orphan.date}T23:59:59-00:00`;
+    const {
+      startTime,
+      endTime,
+    } =
+      getEasternDayBounds(
+        orphan.date
+      );
 
     const url =
       `https://api.bookeo.com/v2/bookings` +
-      `?startTime=${encodeURIComponent(startTime)}` +
-      `&endTime=${encodeURIComponent(endTime)}` +
-      `&productId=${encodeURIComponent(orphan.productId)}`;
+      `?startTime=${encodeURIComponent(
+        startTime
+      )}` +
+      `&endTime=${encodeURIComponent(
+        endTime
+      )}` +
+      `&productId=${encodeURIComponent(
+        orphan.productId
+      )}`;
 
-    const response = await fetch(url, {
-      method: "GET",
-      cache: "no-store",
-      headers: {
-        "X-Bookeo-apiKey": BOOKEO_API_KEY,
-        "X-Bookeo-secretKey": BOOKEO_SECRET_KEY,
-      },
-    });
+    const bookingPages =
+      await fetchAllBookeoBookingPages<BookeoBooking>(
+        url,
+        BOOKEO_API_KEY,
+        BOOKEO_SECRET_KEY,
+        BOOKEO_RECONCILE_TIMEOUT_MS
+      );
 
-    const data = await response.json();
-
-    if (!response.ok) {
+    if (!bookingPages.ok) {
       console.error(
-        "BOOKEO RECONCILIATION QUERY ERROR:",
-        JSON.stringify(data, null, 2)
+        "Bookeo reconciliation query failed.",
+        {
+          sessionId,
+          status:
+            bookingPages.status,
+        }
       );
 
       return NextResponse.json(
         {
           error:
-            "Could not query Bookeo for reconciliation.",
-          bookeoStatus: response.status,
+            "Could not query all Bookeo pages for reconciliation.",
+          bookeoStatus:
+            bookingPages.status,
         },
         { status: 502 }
       );
     }
 
-    const bookings: BookeoBooking[] =
-      Array.isArray(data?.data) ? data.data : [];
+    const bookings =
+      bookingPages.bookings;
 
     /*
-     * Match only active bookings for the exact
-     * Bookeo product and exact Bookeo event.
+     * Match only active bookings for this exact
+     * Bookeo product and event.
      */
-    const eventMatches = bookings.filter(
-      (booking) =>
-        booking.productId === orphan.productId &&
-        booking.eventId === orphan.eventId &&
-        booking.canceled !== true
-    );
-
-    const orphanPlayers = Number(orphan.players);
-    const orphanAmount = Number(orphan.amount);
-
-    /*
-     * Narrow using participant count and total paid.
-     *
-     * Unlike the previous version, missing Bookeo values
-     * DO NOT count as matches. We require positive evidence.
-     */
-    const strongMatches = eventMatches.filter((booking) => {
-      const adults =
-        booking.participants?.numbers?.find(
-          (participant) =>
-            participant.peopleCategoryId === "Cadults"
-        )?.number;
-
-      const paidAmount = Number(
-        booking.price?.totalPaid?.amount
+    const eventMatches =
+      bookings.filter(
+        (booking) =>
+          booking.productId ===
+            orphan.productId &&
+          booking.eventId ===
+            orphan.eventId &&
+          booking.canceled !==
+            true
       );
 
-      if (
-        !Number.isFinite(adults) ||
-        !Number.isFinite(orphanPlayers) ||
-        adults !== orphanPlayers
-      ) {
-        return false;
-      }
+    const orphanPlayers =
+      Number(
+        orphan.players
+      );
 
-      if (
-        !Number.isFinite(paidAmount) ||
-        !Number.isFinite(orphanAmount) ||
-        Math.abs(paidAmount - orphanAmount) >= 0.001
-      ) {
-        return false;
-      }
+    const orphanAmount =
+      Number(
+        orphan.amount
+      );
 
-      return true;
-    });
+    /*
+     * Require positive evidence for participant
+     * count and paid amount.
+     */
+    const strongMatches =
+      eventMatches.filter(
+        (booking) => {
+          const participants =
+            booking.participants
+              ?.numbers?.find(
+                (participant) =>
+                  participant.peopleCategoryId ===
+                  BOOKEO_PEOPLE_CATEGORY_ID
+              )?.number;
+
+          const paidAmount =
+            Number(
+              booking.price
+                ?.totalPaid
+                ?.amount
+            );
+
+          if (
+            !Number.isFinite(
+              participants
+            ) ||
+            !Number.isFinite(
+              orphanPlayers
+            ) ||
+            participants !==
+              orphanPlayers
+          ) {
+            return false;
+          }
+
+          if (
+            !Number.isFinite(
+              paidAmount
+            ) ||
+            !Number.isFinite(
+              orphanAmount
+            ) ||
+            Math.abs(
+              paidAmount -
+                orphanAmount
+            ) >= 0.001
+          ) {
+            return false;
+          }
+
+          return true;
+        }
+      );
 
     /*
      * Exactly one strong match is required.
      *
-     * Zero means we cannot prove Bookeo created it.
+     * Zero means no existing booking can be proven.
      * Multiple means the result is ambiguous.
-     *
-     * This endpoint NEVER creates a new booking.
      */
-    if (strongMatches.length !== 1) {
+    if (
+      strongMatches.length !==
+      1
+    ) {
       const result =
-        strongMatches.length === 0
+        strongMatches.length ===
+        0
           ? "no_match"
           : "ambiguous";
 
-      /*
-      * Preserve the reconciliation result.
-      *
-      * A later recovery action may proceed only when
-      * reconciliation explicitly found zero existing
-      * Bookeo bookings matching this paid transaction.
-      */
       await redis.set(
         `orphan-payment:${sessionId}`,
         {
           ...orphan,
-          lastReconciliationResult: result,
-          lastReconciledAt: Date.now(),
-          eventMatches: eventMatches.length,
-          strongMatches: strongMatches.length,
+          lastReconciliationResult:
+            result,
+          lastReconciledAt:
+            Date.now(),
+          eventMatches:
+            eventMatches.length,
+          strongMatches:
+            strongMatches.length,
         },
         {
-          ex: 60 * 60 * 24 * 30,
+          ex:
+            60 *
+            60 *
+            24 *
+            30,
         }
       );
 
       return NextResponse.json({
         result,
         sessionId,
-        eventMatches: eventMatches.length,
-        strongMatches: strongMatches.length,
-        candidates: strongMatches.map((booking) => ({
-          bookingNumber: booking.bookingNumber,
-          eventId: booking.eventId,
-          productId: booking.productId,
-          startTime: booking.startTime,
-          creationTime: booking.creationTime,
-          title: booking.title,
-          players:
-            booking.participants?.numbers?.find(
-              (participant) =>
-                participant.peopleCategoryId === "Cadults"
-            )?.number ?? null,
-          totalPaid:
-            booking.price?.totalPaid?.amount ?? null,
-        })),
+        eventMatches:
+          eventMatches.length,
+        strongMatches:
+          strongMatches.length,
+
+        candidates:
+          strongMatches.map(
+            (booking) => ({
+              bookingNumber:
+                booking.bookingNumber,
+              eventId:
+                booking.eventId,
+              productId:
+                booking.productId,
+              startTime:
+                booking.startTime,
+              creationTime:
+                booking.creationTime,
+              title:
+                booking.title,
+
+              players:
+                booking
+                  .participants
+                  ?.numbers?.find(
+                    (
+                      participant
+                    ) =>
+                      participant.peopleCategoryId ===
+                      BOOKEO_PEOPLE_CATEGORY_ID
+                  )?.number ??
+                null,
+
+              totalPaid:
+                booking.price
+                  ?.totalPaid
+                  ?.amount ??
+                null,
+            })
+          ),
       });
     }
 
-    const match = strongMatches[0];
+    const match =
+      strongMatches[0];
 
-    const bookingNumber = String(
-      match.bookingNumber || ""
-    );
+    const bookingNumber =
+      String(
+        match.bookingNumber ||
+          ""
+      );
 
     if (!bookingNumber) {
       return NextResponse.json(
         {
-          result: "manual_review_required",
+          result:
+            "manual_review_required",
           error:
             "Matched Bookeo booking has no booking number.",
         },
@@ -316,23 +507,28 @@ export async function POST(request: Request) {
     }
 
     /*
-     * We found exactly one existing Bookeo booking
-     * matching the orphan.
-     *
-     * Record that fact in Redis. We are NOT creating
-     * anything in Bookeo here.
+     * Exactly one existing Bookeo booking matched.
+     * Record that result without creating anything.
      */
     await redis.set(
       `bookeo-finalized:${sessionId}`,
       {
         sessionId,
-        bookingId: bookingNumber,
-        transactionId: orphan.transactionId,
-        finalizedAt: Date.now(),
-        reconciled: true,
+        bookingId:
+          bookingNumber,
+        transactionId:
+          orphan.transactionId,
+        finalizedAt:
+          Date.now(),
+        reconciled:
+          true,
       },
       {
-        ex: 60 * 60 * 24 * 90,
+        ex:
+          60 *
+          60 *
+          24 *
+          90,
       }
     );
 
@@ -340,31 +536,61 @@ export async function POST(request: Request) {
       `orphan-payment:${sessionId}`,
       {
         ...orphan,
-        status: "reconciled",
-        reconciledBookingNumber: bookingNumber,
-        reconciledAt: Date.now(),
+        status:
+          "reconciled",
+        reconciledBookingNumber:
+          bookingNumber,
+        reconciledAt:
+          Date.now(),
       },
       {
-        ex: 60 * 60 * 24 * 30,
+        ex:
+          60 *
+          60 *
+          24 *
+          30,
       }
     );
 
     return NextResponse.json({
-      result: "reconciled",
+      result:
+        "reconciled",
       sessionId,
       bookingNumber,
     });
   } catch (error) {
+    const isTimeout =
+      error instanceof Error &&
+      (
+        error.name ===
+          "TimeoutError" ||
+        error.name ===
+          "AbortError"
+      );
+
     console.error(
-      "BOOKEO RECONCILIATION ERROR:",
-      error
+      "Bookeo reconciliation request failed.",
+      {
+        reason:
+          isTimeout
+            ? "timeout"
+            : "request_error",
+      }
     );
 
     return NextResponse.json(
       {
-        error: "Could not reconcile orphan payment.",
+        error:
+          isTimeout
+            ? "Bookeo took too long to respond during reconciliation."
+            : "Could not reconcile orphan payment.",
       },
-      { status: 500 }
+      {
+        status:
+          isTimeout
+            ? 504
+            : 500,
+      }
     );
   }
 }

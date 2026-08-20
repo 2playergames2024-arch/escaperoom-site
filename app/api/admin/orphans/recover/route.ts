@@ -1,11 +1,40 @@
 import { NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
+import { incrementRateLimit } from "@/app/lib/rateLimit";
+import {
+  BOOKEO_PEOPLE_CATEGORY_ID,
+  LOCATIONS,
+} from "@/app/data/locations";
+import {
+  getEasternDayBounds,
+} from "@/app/lib/booking";
+
+import { fetchAllBookeoBookingPages } from "@/app/lib/bookeoBookingsPagination";
 
 const redis = Redis.fromEnv();
 
-const BOOKEO_KOP_API_KEY = process.env.BOOKEO_KOP_API_KEY;
-const BOOKEO_CH_API_KEY = process.env.BOOKEO_CH_API_KEY;
-const BOOKEO_SECRET_KEY = process.env.BOOKEO_SECRET_KEY;
+const BOOKEO_KOP_API_KEY =
+  process.env.BOOKEO_KOP_API_KEY;
+
+const BOOKEO_CH_API_KEY =
+  process.env.BOOKEO_CH_API_KEY;
+
+const BOOKEO_SECRET_KEY =
+  process.env.BOOKEO_SECRET_KEY;
+
+const EXTERNAL_REQUEST_TIMEOUT_MS = 15_000;
+
+function isTimeoutError(
+  error: unknown
+) {
+  return (
+    error instanceof Error &&
+    (
+      error.name === "TimeoutError" ||
+      error.name === "AbortError"
+    )
+  );
+}
 
 type OrphanPayment = {
   sessionId: string;
@@ -24,9 +53,16 @@ type OrphanPayment = {
   phone: string;
   bookeoError: unknown;
   createdAt: number;
-  status: "needs_recovery" | "reconciled" | "recovered";
-  failureType: "bookeo_rejected" | "uncertain";
-  lastReconciliationResult?: "no_match" | "ambiguous";
+  status:
+  | "needs_recovery"
+  | "reconciled"
+  | "recovered";
+  failureType:
+  | "bookeo_rejected"
+  | "uncertain";
+  lastReconciliationResult?:
+  | "no_match"
+  | "ambiguous";
   lastReconciledAt?: number;
 };
 
@@ -35,12 +71,14 @@ type BookeoBooking = {
   eventId?: string;
   productId?: string;
   canceled?: boolean;
+
   participants?: {
     numbers?: Array<{
       peopleCategoryId?: string;
       number?: number;
     }>;
   };
+
   price?: {
     totalPaid?: {
       amount?: string;
@@ -48,16 +86,65 @@ type BookeoBooking = {
   };
 };
 
-export async function POST(request: Request) {
+export async function POST(
+  request: Request
+) {
   let lockKey = "";
   let lockToken = "";
   let lockAcquired = false;
 
   try {
+    /*
+     * Protect this high-impact administrative endpoint
+     * from unlimited attempts.
+     */
+    const forwardedFor =
+      request.headers.get(
+        "x-forwarded-for"
+      );
+
+    const ip =
+      forwardedFor
+        ?.split(",")[0]
+        ?.trim() ||
+      request.headers.get(
+        "x-real-ip"
+      ) ||
+      "unknown";
+
+    const rateLimitKey =
+      `rate-limit:admin-recover:${ip}`;
+
+    const attempts =
+      await incrementRateLimit(
+        redis,
+        rateLimitKey,
+        600
+      );
+
+    if (attempts > 20) {
+      return NextResponse.json(
+        {
+          error:
+            "Too many recovery administration requests.",
+        },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": "600",
+          },
+        }
+      );
+    }
+
     const adminSecret =
       process.env.ADMIN_RECOVERY_SECRET;
 
     if (!adminSecret) {
+      console.error(
+        "Recovery administration is not configured."
+      );
+
       return NextResponse.json(
         {
           error:
@@ -68,11 +155,14 @@ export async function POST(request: Request) {
     }
 
     if (
-      request.headers.get("x-admin-secret") !==
-      adminSecret
+      request.headers.get(
+        "x-admin-secret"
+      ) !== adminSecret
     ) {
       return NextResponse.json(
-        { error: "Unauthorized." },
+        {
+          error: "Unauthorized.",
+        },
         { status: 401 }
       );
     }
@@ -87,7 +177,10 @@ export async function POST(request: Request) {
       process.env.AUTHORIZE_ENVIRONMENT ||
       "production";
 
-    if (!loginId || !transactionKey) {
+    if (
+      !loginId ||
+      !transactionKey
+    ) {
       return NextResponse.json(
         {
           error:
@@ -97,17 +190,34 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = await request.json();
+    const body =
+      await request.json();
 
-    const sessionId = String(
-      body.sessionId || ""
-    );
+    const sessionId =
+      String(
+        body.sessionId || ""
+      ).trim();
 
     if (!sessionId) {
       return NextResponse.json(
         {
           error:
             "Missing booking session ID.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (
+      sessionId.length > 100 ||
+      !/^ERM-[0-9a-f-]+$/i.test(
+        sessionId
+      )
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Invalid booking session ID.",
         },
         { status: 400 }
       );
@@ -129,13 +239,18 @@ export async function POST(request: Request) {
     }
 
     const BOOKEO_API_KEY =
-      orphan.location === "cherry-hill"
+      orphan.location ===
+        LOCATIONS.cherryHill.slug
         ? BOOKEO_CH_API_KEY
-        : orphan.location === "king-of-prussia"
+        : orphan.location ===
+          LOCATIONS.kingOfPrussia.slug
           ? BOOKEO_KOP_API_KEY
           : null;
 
-    if (!BOOKEO_API_KEY || !BOOKEO_SECRET_KEY) {
+    if (
+      !BOOKEO_API_KEY ||
+      !BOOKEO_SECRET_KEY
+    ) {
       return NextResponse.json(
         {
           error:
@@ -145,7 +260,10 @@ export async function POST(request: Request) {
       );
     }
 
-    if (orphan.status !== "needs_recovery") {
+    if (
+      orphan.status !==
+      "needs_recovery"
+    ) {
       return NextResponse.json(
         {
           error:
@@ -156,8 +274,8 @@ export async function POST(request: Request) {
     }
 
     /*
-     * Recovery is only permitted after reconciliation
-     * explicitly found no matching Bookeo booking.
+     * Recovery can only occur after reconciliation
+     * explicitly found zero matching bookings.
      */
     if (
       orphan.lastReconciliationResult !==
@@ -174,12 +292,16 @@ export async function POST(request: Request) {
     }
 
     /*
-     * Require a recent reconciliation result.
+     * Require a fresh reconciliation.
      */
     const reconciliationAge =
-      Date.now() - orphan.lastReconciledAt;
+      Date.now() -
+      orphan.lastReconciledAt;
 
-    if (reconciliationAge > 5 * 60 * 1000) {
+    if (
+      reconciliationAge >
+      5 * 60 * 1000
+    ) {
       return NextResponse.json(
         {
           error:
@@ -189,39 +311,42 @@ export async function POST(request: Request) {
       );
     }
 
-    /*
-     * Check whether this session has already
-     * been finalized.
-     */
     const existingFinalization =
       await redis.get(
         `bookeo-finalized:${sessionId}`
       );
 
-    if (existingFinalization) {
+    if (
+      existingFinalization
+    ) {
       return NextResponse.json({
-        result: "already_finalized",
+        result:
+          "already_finalized",
       });
     }
 
     /*
-     * Acquire an atomic recovery lock.
+     * Atomic recovery lock.
      */
     lockKey =
       `bookeo-recovery-lock:${sessionId}`;
 
-    lockToken = crypto.randomUUID();
+    lockToken =
+      crypto.randomUUID();
 
-    const lockResult = await redis.set(
-      lockKey,
-      lockToken,
-      {
-        nx: true,
-        ex: 120,
-      }
-    );
+    const lockResult =
+      await redis.set(
+        lockKey,
+        lockToken,
+        {
+          nx: true,
+          ex: 120,
+        }
+      );
 
-    if (lockResult !== "OK") {
+    if (
+      lockResult !== "OK"
+    ) {
       return NextResponse.json(
         {
           error:
@@ -233,60 +358,102 @@ export async function POST(request: Request) {
 
     lockAcquired = true;
 
-    /*
-     * Re-check successful finalization after
-     * obtaining the lock.
-     */
     const finalizedAfterLock =
       await redis.get(
         `bookeo-finalized:${sessionId}`
       );
 
-    if (finalizedAfterLock) {
+    if (
+      finalizedAfterLock
+    ) {
       return NextResponse.json({
-        result: "already_finalized",
+        result:
+          "already_finalized",
       });
     }
 
     /*
      * FRESH AUTHORIZE.NET VERIFICATION
-     *
-     * Ask Authorize.net directly for the
-     * transaction associated with this orphan.
      */
     const authorizeApiUrl =
-      authorizeEnvironment === "sandbox"
+      authorizeEnvironment ===
+        "sandbox"
         ? "https://apitest.authorize.net/xml/v1/request.api"
         : "https://api.authorize.net/xml/v1/request.api";
 
-    const authorizeResponse = await fetch(
-      authorizeApiUrl,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        cache: "no-store",
-        body: JSON.stringify({
-          getTransactionDetailsRequest: {
-            merchantAuthentication: {
-              name: loginId,
-              transactionKey,
+    let authorizeResponse: Response;
+
+    try {
+      authorizeResponse =
+        await fetch(
+          authorizeApiUrl,
+          {
+            method: "POST",
+            signal:
+              AbortSignal.timeout(
+                EXTERNAL_REQUEST_TIMEOUT_MS
+              ),
+            headers: {
+              "Content-Type":
+                "application/json",
             },
-            transId: orphan.transactionId,
-          },
-        }),
-      }
-    );
+            cache: "no-store",
+            body:
+              JSON.stringify({
+                getTransactionDetailsRequest:
+                {
+                  merchantAuthentication:
+                  {
+                    name:
+                      loginId,
+                    transactionKey,
+                  },
+
+                  transId:
+                    orphan.transactionId,
+                },
+              }),
+          }
+        );
+    } catch (error) {
+      console.error(
+        "Authorize.Net recovery verification request failed.",
+        {
+          sessionId,
+          reason:
+            isTimeoutError(
+              error
+            )
+              ? "timeout"
+              : "request_error",
+        }
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            isTimeoutError(error)
+              ? "Authorize.net took too long to respond during recovery verification."
+              : "Authorize.net could not be reached during recovery verification.",
+        },
+        {
+          status:
+            isTimeoutError(error)
+              ? 504
+              : 502,
+        }
+      );
+    }
 
     const authorizeData =
       await authorizeResponse.json();
 
     if (
       !authorizeResponse.ok ||
-      authorizeData?.messages?.resultCode !==
-      "Ok" ||
-      !authorizeData?.transaction
+      authorizeData?.messages
+        ?.resultCode !== "Ok" ||
+      !authorizeData
+        ?.transaction
     ) {
       return NextResponse.json(
         {
@@ -304,47 +471,45 @@ export async function POST(request: Request) {
       Number(orphan.amount);
 
     const actualAmount =
-      Number(transaction.authAmount);
+      Number(
+        transaction.authAmount
+      );
 
     const amountMatches =
-      Number.isFinite(expectedAmount) &&
-      Number.isFinite(actualAmount) &&
+      Number.isFinite(
+        expectedAmount
+      ) &&
+      Number.isFinite(
+        actualAmount
+      ) &&
       Math.abs(
-        expectedAmount - actualAmount
+        expectedAmount -
+        actualAmount
       ) < 0.001;
+
+    const transactionStatus =
+      String(
+        transaction.transactionStatus ||
+        ""
+      );
 
     const statusIsValid = [
       "capturedPendingSettlement",
       "settledSuccessfully",
     ].includes(
-      String(
-        transaction.transactionStatus || ""
-      )
+      transactionStatus
     );
 
-    /*
-     * Do NOT check transaction.refId here.
-     *
-     * The original Authorize.net refId is not
-     * reliably returned inside the transaction
-     * object by getTransactionDetails for
-     * Accept Hosted transactions.
-     *
-     * The transaction/session relationship was
-     * established earlier by our authenticated
-     * Authorize.net webhook.
-     */
-    if (!amountMatches || !statusIsValid) {
+    if (
+      !amountMatches ||
+      !statusIsValid
+    ) {
       console.error(
-        "RECOVERY PAYMENT VERIFICATION FAILED:",
+        "Recovery payment verification failed.",
         {
           sessionId,
-          transactionId:
-            orphan.transactionId,
-          expectedAmount,
-          actualAmount,
-          transactionStatus:
-            transaction.transactionStatus,
+          amountMatches,
+          transactionStatus,
         }
       );
 
@@ -358,104 +523,162 @@ export async function POST(request: Request) {
     }
 
     /*
-     * RECONCILE BOOKEO AGAIN INSIDE THE LOCK.
-     *
-     * Immediately before creating anything,
-     * check once more for an existing booking.
+     * CHECK BOOKEO AGAIN INSIDE THE LOCK
      */
-    const startTime =
-      `${orphan.date}T00:00:00-00:00`;
-
-    const endTime =
-      `${orphan.date}T23:59:59-00:00`;
+    const {
+      startTime,
+      endTime,
+    } =
+      getEasternDayBounds(
+        orphan.date
+      );
 
     const lookupUrl =
       `https://api.bookeo.com/v2/bookings` +
-      `?startTime=${encodeURIComponent(startTime)}` +
-      `&endTime=${encodeURIComponent(endTime)}` +
-      `&productId=${encodeURIComponent(orphan.productId)}`;
+      `?startTime=${encodeURIComponent(
+        startTime
+      )}` +
+      `&endTime=${encodeURIComponent(
+        endTime
+      )}` +
+      `&productId=${encodeURIComponent(
+        orphan.productId
+      )}`;
 
-    const lookupResponse = await fetch(
-      lookupUrl,
-      {
-        method: "GET",
-        cache: "no-store",
-        headers: {
-          "X-Bookeo-apiKey": BOOKEO_API_KEY,
-          "X-Bookeo-secretKey": BOOKEO_SECRET_KEY,
-        },
-      }
-    );
+    let bookingPages: {
+      ok: boolean;
+      status: number;
+      bookings: BookeoBooking[];
+    };
 
-    const lookupData =
-      await lookupResponse.json();
+    try {
+      bookingPages =
+        await fetchAllBookeoBookingPages<BookeoBooking>(
+          lookupUrl,
+          BOOKEO_API_KEY,
+          BOOKEO_SECRET_KEY,
+          EXTERNAL_REQUEST_TIMEOUT_MS
+        );
+    } catch (error) {
+      console.error(
+        "Bookeo pre-recovery lookup failed.",
+        {
+          sessionId,
+          reason:
+            isTimeoutError(
+              error
+            )
+              ? "timeout"
+              : "request_error",
+        }
+      );
 
-    if (!lookupResponse.ok) {
       return NextResponse.json(
         {
           error:
-            "Bookeo could not be checked immediately before recovery.",
+            isTimeoutError(error)
+              ? "Bookeo took too long to respond before recovery. No booking was created."
+              : "Bookeo could not be checked before recovery. No booking was created.",
+        },
+        {
+          status:
+            isTimeoutError(error)
+              ? 504
+              : 502,
+        }
+      );
+    }
+
+    if (!bookingPages.ok) {
+      return NextResponse.json(
+        {
+          error:
+            "Bookeo could not be checked across all result pages immediately before recovery. No booking was created.",
+          bookeoStatus:
+            bookingPages.status,
         },
         { status: 502 }
       );
     }
 
-    const bookings: BookeoBooking[] =
-      Array.isArray(lookupData?.data)
-        ? lookupData.data
-        : [];
+    const bookings =
+      bookingPages.bookings;
 
     const orphanPlayers =
-      Number(orphan.players);
+      Number(
+        orphan.players
+      );
 
     const existingMatches =
-      bookings.filter((booking) => {
-        if (
-          booking.productId !==
-          orphan.productId ||
-          booking.eventId !==
-          orphan.eventId ||
-          booking.canceled === true
-        ) {
-          return false;
+      bookings.filter(
+        (booking) => {
+          if (
+            booking.productId !==
+            orphan.productId ||
+            booking.eventId !==
+            orphan.eventId ||
+            booking.canceled ===
+            true
+          ) {
+            return false;
+          }
+
+          const participants =
+            booking.participants
+              ?.numbers?.find(
+                (
+                  participant
+                ) =>
+                  participant.peopleCategoryId ===
+                  BOOKEO_PEOPLE_CATEGORY_ID
+              )?.number;
+
+          const paidAmount =
+            Number(
+              booking.price
+                ?.totalPaid
+                ?.amount
+            );
+
+          return (
+            Number.isFinite(
+              participants
+            ) &&
+            participants ===
+            orphanPlayers &&
+            Number.isFinite(
+              paidAmount
+            ) &&
+            Math.abs(
+              paidAmount -
+              expectedAmount
+            ) < 0.001
+          );
         }
+      );
 
-        const adults =
-          booking.participants?.numbers?.find(
-            (participant) =>
-              participant.peopleCategoryId ===
-              "Cadults"
-          )?.number;
-
-        const paidAmount = Number(
-          booking.price?.totalPaid?.amount
-        );
-
-        return (
-          Number.isFinite(adults) &&
-          adults === orphanPlayers &&
-          Number.isFinite(paidAmount) &&
-          Math.abs(
-            paidAmount - expectedAmount
-          ) < 0.001
-        );
-      });
-
-    if (existingMatches.length > 0) {
+    if (
+      existingMatches.length >
+      0
+    ) {
       /*
        * A matching booking appeared after
-       * reconciliation.
-       *
-       * Never create a duplicate.
+       * reconciliation. Never create a duplicate.
        */
-      if (existingMatches.length === 1) {
+      if (
+        existingMatches.length ===
+        1
+      ) {
         const existingBookingNumber =
           String(
             existingMatches[0]
-              .bookingNumber || ""
+              .bookingNumber ||
+            ""
           );
 
-        if (!existingBookingNumber) {
+        if (
+          !existingBookingNumber
+        ) {
           return NextResponse.json(
             {
               result:
@@ -475,11 +698,17 @@ export async function POST(request: Request) {
               existingBookingNumber,
             transactionId:
               orphan.transactionId,
-            finalizedAt: Date.now(),
-            reconciled: true,
+            finalizedAt:
+              Date.now(),
+            reconciled:
+              true,
           },
           {
-            ex: 60 * 60 * 24 * 90,
+            ex:
+              60 *
+              60 *
+              24 *
+              90,
           }
         );
 
@@ -487,18 +716,25 @@ export async function POST(request: Request) {
           `orphan-payment:${sessionId}`,
           {
             ...orphan,
-            status: "reconciled",
+            status:
+              "reconciled",
             reconciledBookingNumber:
               existingBookingNumber,
-            reconciledAt: Date.now(),
+            reconciledAt:
+              Date.now(),
           },
           {
-            ex: 60 * 60 * 24 * 30,
+            ex:
+              60 *
+              60 *
+              24 *
+              30,
           }
         );
 
         return NextResponse.json({
-          result: "reconciled",
+          result:
+            "reconciled",
           sessionId,
           bookingNumber:
             existingBookingNumber,
@@ -519,125 +755,285 @@ export async function POST(request: Request) {
     }
 
     /*
-     * At this point:
+     * CREATE THE RECOVERY BOOKING
      *
-     * - payment was freshly verified;
-     * - no previous finalization exists;
-     * - reconciliation recently returned no match;
-     * - Bookeo was checked again inside the lock;
-     * - no matching booking exists.
+     * IMPORTANT:
+     * Once this POST is sent, a timeout/network failure
+     * creates an UNCERTAIN outcome. Bookeo may have
+     * created the booking even if we never received
+     * the response.
      *
-     * Create the recovery booking.
+     * Therefore we invalidate the previous
+     * reconciliation result before allowing any
+     * future recovery attempt.
      */
     const createUrl =
-      `https://api.bookeo.com/v2/bookings`;
+      "https://api.bookeo.com/v2/bookings";
 
-    const bookeoResponse = await fetch(
-      createUrl,
-      {
-        method: "POST",
-        cache: "no-store",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Bookeo-apiKey": BOOKEO_API_KEY,
-          "X-Bookeo-secretKey": BOOKEO_SECRET_KEY,
-        },
-        body: JSON.stringify({
-          productId: orphan.productId,
-          eventId: orphan.eventId,
+    let bookeoResponse: Response;
 
-          participants: {
-            numbers: [
-              {
-                peopleCategoryId:
-                  "Cadults",
-                number:
-                  Number(orphan.players),
-              },
-            ],
-          },
-
-          customer: {
-            firstName:
-              orphan.firstName || "",
-            lastName:
-              orphan.lastName || "",
-            emailAddress:
-              orphan.email || "",
-            phoneNumbers: orphan.phone
-              ? [
-                {
-                  number:
-                    orphan.phone,
-                  type: "mobile",
-                },
-              ]
-              : [],
-          },
-
-          /*
-           * This records the EXISTING
-           * Authorize.net payment in Bookeo.
-           *
-           * It does NOT make another
-           * Authorize.net charge.
-           */
-          initialPayments: [
-            {
-              reason:
-                "Paid online - recovered booking",
-              comment:
-                `Recovered from Authorize.net transaction ${orphan.transactionId}`,
-              amount: {
-                amount:
-                  expectedAmount.toFixed(2),
-                currency: "USD",
-              },
-              paymentMethod:
-                "creditCard",
+    try {
+      bookeoResponse =
+        await fetch(
+          createUrl,
+          {
+            method: "POST",
+            cache: "no-store",
+            signal:
+              AbortSignal.timeout(
+                EXTERNAL_REQUEST_TIMEOUT_MS
+              ),
+            headers: {
+              "Content-Type":
+                "application/json",
+              "X-Bookeo-apiKey":
+                BOOKEO_API_KEY,
+              "X-Bookeo-secretKey":
+                BOOKEO_SECRET_KEY,
             },
-          ],
-        }),
-      }
-    );
+            body:
+              JSON.stringify({
+                productId:
+                  orphan.productId,
 
-    const bookeoData =
-      await bookeoResponse.json();
+                eventId:
+                  orphan.eventId,
 
-    if (!bookeoResponse.ok) {
+                participants: {
+                  numbers: [
+                    {
+                      peopleCategoryId:
+                        BOOKEO_PEOPLE_CATEGORY_ID,
+                      number:
+                        Number(
+                          orphan.players
+                        ),
+                    },
+                  ],
+                },
+
+                customer: {
+                  firstName:
+                    orphan.firstName ||
+                    "",
+                  lastName:
+                    orphan.lastName ||
+                    "",
+                  emailAddress:
+                    orphan.email ||
+                    "",
+                  phoneNumbers:
+                    orphan.phone
+                      ? [
+                        {
+                          number:
+                            orphan.phone,
+                          type:
+                            "mobile",
+                        },
+                      ]
+                      : [],
+                },
+
+                initialPayments: [
+                  {
+                    reason:
+                      "Paid online - recovered booking",
+
+                    comment:
+                      `Recovered from Authorize.net transaction ${orphan.transactionId}`,
+
+                    amount: {
+                      amount:
+                        expectedAmount.toFixed(
+                          2
+                        ),
+                      currency:
+                        "USD",
+                    },
+
+                    paymentMethod:
+                      "creditCard",
+                  },
+                ],
+              }),
+          }
+        );
+    } catch (error) {
+      /*
+       * Do NOT allow another recovery attempt using
+       * the old "no_match" reconciliation.
+       *
+       * Bookeo may have created the booking before
+       * this request timed out.
+       */
       await redis.set(
         `orphan-payment:${sessionId}`,
         {
           ...orphan,
-          bookeoError: bookeoData,
+
+          bookeoError: {
+            stage:
+              "recovery_create",
+            outcome:
+              "uncertain",
+            reason:
+              isTimeoutError(
+                error
+              )
+                ? "timeout"
+                : "request_error",
+          },
+
           lastRecoveryAttemptAt:
             Date.now(),
+
+          /*
+           * Setting this to zero deliberately causes
+           * the recovery precondition to fail until
+           * reconciliation is run again.
+           */
+          lastReconciledAt:
+            0,
         },
         {
-          ex: 60 * 60 * 24 * 30,
+          ex:
+            60 *
+            60 *
+            24 *
+            30,
+        }
+      );
+
+      console.error(
+        "Bookeo recovery creation outcome is uncertain.",
+        {
+          sessionId,
+          reason:
+            isTimeoutError(
+              error
+            )
+              ? "timeout"
+              : "request_error",
         }
       );
 
       return NextResponse.json(
         {
           error:
-            "Bookeo recovery booking failed.",
+            "The recovery booking could not be safely confirmed. Reconcile this payment again before attempting recovery.",
+          reconciliationRequired:
+            true,
+        },
+        {
+          status:
+            isTimeoutError(error)
+              ? 504
+              : 502,
+        }
+      );
+    }
+
+    const bookeoData =
+      await bookeoResponse.json();
+
+    if (
+      !bookeoResponse.ok
+    ) {
+      await redis.set(
+        `orphan-payment:${sessionId}`,
+        {
+          ...orphan,
+
+          bookeoError: {
+            stage:
+              "recovery_create",
+            status:
+              bookeoResponse.status,
+          },
+
+          lastRecoveryAttemptAt:
+            Date.now(),
+
+          /*
+           * Require reconciliation again before
+           * another create attempt.
+           */
+          lastReconciledAt:
+            0,
+        },
+        {
+          ex:
+            60 *
+            60 *
+            24 *
+            30,
+        }
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            "Bookeo recovery booking failed. Reconcile again before another recovery attempt.",
           bookeoStatus:
             bookeoResponse.status,
+          reconciliationRequired:
+            true,
         },
         { status: 502 }
       );
     }
 
-    const bookingNumber = String(
-      bookeoData?.bookingNumber || ""
-    );
+    const bookingNumber =
+      String(
+        bookeoData
+          ?.bookingNumber ||
+        ""
+      );
 
-    if (!bookingNumber) {
+    /*
+     * Even an HTTP success without a booking number
+     * is treated as uncertain. Do not automatically
+     * create another booking.
+     */
+    if (
+      !bookingNumber
+    ) {
+      await redis.set(
+        `orphan-payment:${sessionId}`,
+        {
+          ...orphan,
+
+          bookeoError: {
+            stage:
+              "recovery_create",
+            outcome:
+              "uncertain",
+            reason:
+              "success_without_booking_number",
+          },
+
+          lastRecoveryAttemptAt:
+            Date.now(),
+
+          lastReconciledAt:
+            0,
+        },
+        {
+          ex:
+            60 *
+            60 *
+            24 *
+            30,
+        }
+      );
+
       return NextResponse.json(
         {
           error:
-            "Bookeo reported success but returned no booking number.",
+            "Bookeo responded to the recovery request but the booking could not be safely confirmed. Reconcile again before attempting recovery.",
+          reconciliationRequired:
+            true,
         },
         { status: 500 }
       );
@@ -647,14 +1043,21 @@ export async function POST(request: Request) {
       `bookeo-finalized:${sessionId}`,
       {
         sessionId,
-        bookingId: bookingNumber,
+        bookingId:
+          bookingNumber,
         transactionId:
           orphan.transactionId,
-        finalizedAt: Date.now(),
-        recovered: true,
+        finalizedAt:
+          Date.now(),
+        recovered:
+          true,
       },
       {
-        ex: 60 * 60 * 24 * 90,
+        ex:
+          60 *
+          60 *
+          24 *
+          90,
       }
     );
 
@@ -662,25 +1065,41 @@ export async function POST(request: Request) {
       `orphan-payment:${sessionId}`,
       {
         ...orphan,
-        status: "recovered",
+        status:
+          "recovered",
         recoveredBookingNumber:
           bookingNumber,
-        recoveredAt: Date.now(),
+        recoveredAt:
+          Date.now(),
       },
       {
-        ex: 60 * 60 * 24 * 30,
+        ex:
+          60 *
+          60 *
+          24 *
+          30,
       }
     );
 
     return NextResponse.json({
-      result: "recovered",
+      result:
+        "recovered",
       sessionId,
       bookingNumber,
     });
   } catch (error) {
     console.error(
-      "ORPHAN RECOVERY ERROR:",
-      error
+      "Orphan recovery request failed.",
+      {
+        reason:
+          isTimeoutError(
+            error
+          )
+            ? "timeout"
+            : error instanceof Error
+              ? error.name
+              : "unknown",
+      }
     );
 
     return NextResponse.json(
@@ -703,14 +1122,22 @@ export async function POST(request: Request) {
           );
 
         if (
-          currentToken === lockToken
+          currentToken ===
+          lockToken
         ) {
-          await redis.del(lockKey);
+          await redis.del(
+            lockKey
+          );
         }
       } catch (error) {
         console.error(
-          "ORPHAN RECOVERY LOCK RELEASE ERROR:",
-          error
+          "Recovery lock release failed.",
+          {
+            reason:
+              error instanceof Error
+                ? error.name
+                : "unknown",
+          }
         );
       }
     }

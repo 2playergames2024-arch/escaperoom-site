@@ -2,6 +2,14 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { isValidBookingSessionId } from "../../lib/booking";
+import {
+  trackClarityEvent,
+} from "../../lib/clarity";
+import {
+  trackGa4Purchase,
+  type Ga4Purchase,
+} from "../../lib/googleAnalytics";
 
 function ConfirmPageContent() {
   const searchParams = useSearchParams();
@@ -12,6 +20,7 @@ function ConfirmPageContent() {
   const [retryTrigger, setRetryTrigger] = useState(0);
 
   const sessionId = searchParams.get("sessionId") || "";
+  const validSessionId = isValidBookingSessionId(sessionId);
 
   useEffect(() => {
     async function completeBooking() {
@@ -58,11 +67,6 @@ function ConfirmPageContent() {
             continue;
           }
 
-          console.log(
-            "Payment verification failed:",
-            verifyData
-          );
-
           setStatus(
             "We could not verify your payment automatically. Please try confirming again or contact us for assistance."
           );
@@ -98,33 +102,71 @@ function ConfirmPageContent() {
         const data = await res.json();
 
         if (!res.ok) {
-          console.log("Finalize booking failed:", data);
+          trackClarityEvent(
+            "booking_finalization_failed"
+          );
+
+          if (
+            data?.recoveryRequired ||
+            data?.retryable === false
+          ) {
+            setStatus(
+              "Your payment was received. We are verifying your reservation and have alerted our staff. Do not make another booking."
+            );
+
+            setCanRetry(false);
+            return;
+          }
 
           setStatus(
             "Your payment was received, but the booking could not be finalized automatically. Please try confirming again or contact us."
           );
+
           setCanRetry(true);
           return;
         }
 
-        setBookingId(data?.data?.id || "");
-        setStatus("Your booking is confirmed.");
-      } catch (error) {
-        console.log("Complete booking crashed:", error);
+        setBookingId(
+          data?.data?.id || ""
+        );
+
+        setStatus(
+          "Your booking is confirmed."
+        );
+
+        const purchase =
+          data?.purchase as
+            | Ga4Purchase
+            | undefined;
+
+        if (purchase) {
+          trackGa4Purchase(
+            purchase
+          );
+        }
+
+        trackClarityEvent(
+          "booking_completed"
+        );
+      } catch {
+        trackClarityEvent(
+          "booking_finalization_failed"
+        );
 
         setStatus(
           "Your payment may have been received, but we could not complete the booking automatically. Please try confirming again or contact us."
         );
+
         setCanRetry(true);
       }
     }
 
-    if (sessionId) {
+    if (validSessionId) {
       completeBooking();
     }
-  }, [sessionId, retryTrigger]);
+  }, [sessionId, validSessionId, retryTrigger]);
 
-  const displayedStatus = sessionId
+  const displayedStatus = validSessionId
     ? status
     : "Booking session was missing. Please contact us for assistance.";
 

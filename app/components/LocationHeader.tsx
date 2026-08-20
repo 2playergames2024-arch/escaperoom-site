@@ -34,13 +34,13 @@ export default function LocationHeader({
 
   const otherLocation = isKingOfPrussia
     ? {
-        shortName: "Cherry Hill",
-        href: "/locations/cherry-hill",
-      }
+      shortName: "Cherry Hill",
+      href: "/locations/cherry-hill",
+    }
     : {
-        shortName: "King of Prussia",
-        href: "/locations/king-of-prussia",
-      };
+      shortName: "King of Prussia",
+      href: "/locations/king-of-prussia",
+    };
 
   const giftVoucherHref = isKingOfPrussia
     ? "/gift-vouchers/details?location=king-of-prussia"
@@ -94,7 +94,10 @@ export default function LocationHeader({
 
         {/* CENTER: NAVIGATION */}
         <>
-          <nav className="location-header-nav">
+          <nav
+            className="location-header-nav"
+            aria-label="Location navigation"
+          >
             <div className="desktop-nav">
               <Link href={homeHref}>Home</Link>
               <Link href={roomsHref}>Explore Rooms</Link>
@@ -207,6 +210,8 @@ export default function LocationHeader({
                 setLocationMenuOpen((current) => !current)
               }
               aria-expanded={locationMenuOpen}
+              aria-controls="location-dropdown-menu"
+              aria-label={`Change location. Current location: ${locationName}`}
               className="location-selector"
             >
               <span className="location-name">
@@ -219,7 +224,10 @@ export default function LocationHeader({
             </button>
 
             {locationMenuOpen && (
-              <div className="location-dropdown">
+              <div
+                id="location-dropdown-menu"
+                className="location-dropdown"
+              >
                 <button
                   type="button"
                   onClick={() => setLocationMenuOpen(false)}

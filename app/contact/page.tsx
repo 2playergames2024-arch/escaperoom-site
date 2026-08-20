@@ -8,70 +8,152 @@ export const metadata: Metadata = {
     "Contact Escape Room Mystery with questions about bookings, parties, team-building events, or our escape rooms in King of Prussia, PA and Cherry Hill, NJ.",
 };
 
-export default function ContactPage() {
+type ContactPageProps = {
+  searchParams: Promise<{
+    sent?: string | string[];
+  }>;
+};
+
+export default async function ContactPage({
+  searchParams,
+}: ContactPageProps) {
+  const params =
+    await searchParams;
+
+  const sent =
+    params.sent === "true";
+
   return (
-    <main style={{ minHeight: "100vh", background: "#0b0f1a", color: "white" }}>
+    <>
       <SupportHeader />
 
-      <section style={{ maxWidth: "768px", margin: "0 auto", padding: "64px 24px" }}>
-        <h1 style={{ fontSize: "40px", fontWeight: "bold", marginBottom: "16px" }}>
-          Contact Escape Room Mystery
-        </h1>
+      <main className="min-h-screen bg-slate-950 text-white">
+        <section className="mx-auto max-w-3xl px-6 py-16">
+          <h1 className="mb-4 text-4xl font-black">
+            Contact Escape Room Mystery
+          </h1>
 
-        <p style={{ color: "#d1d5db", marginBottom: "32px", lineHeight: "1.6" }}>
-          Have a question about booking, parties, team-building, or one of our rooms?
-          Send us a message and we’ll get back to you.
-        </p>
+          <p className="mb-8 leading-relaxed text-slate-300">
+            Have a question about booking, parties, team-building,
+            or one of our rooms? Send us a message and we&apos;ll
+            get back to you.
+          </p>
 
-        <form action="/api/contact" method="POST" style={{ display: "grid", gap: "20px" }}>
-          <input
-            type="text"
-            name="website"
-            tabIndex={-1}
-            autoComplete="off"
-            aria-hidden="true"
-            style={{
-              position: "absolute",
-              left: "-9999px",
-              width: "1px",
-              height: "1px",
-              opacity: 0,
-            }}
-          />
+          {sent ? (
+            <div
+              role="status"
+              className="rounded-xl border-2 border-green-400 bg-green-950/40 p-6"
+            >
+              <h2 className="text-2xl font-black text-green-300">
+                Message sent successfully
+              </h2>
 
-          <input name="name" required placeholder="Your name" style={fieldStyle} />
-          <input name="email" type="email" required placeholder="Your email" style={fieldStyle} />
-          <input name="phone" placeholder="Phone number" style={fieldStyle} />
-          <textarea name="message" required placeholder="How can we help?" rows={6} style={fieldStyle} />
+              <p className="mt-3 leading-relaxed text-slate-200">
+                Thank you for contacting Escape Room Mystery.
+                Your message was sent successfully, and we&apos;ll
+                get back to you as soon as we can.
+              </p>
+            </div>
+          ) : (
+            <form
+              action="/api/contact"
+              method="POST"
+              className="grid gap-5"
+            >
+              <input
+                type="text"
+                name="website"
+                tabIndex={-1}
+                autoComplete="off"
+                aria-hidden="true"
+                className="absolute left-[-9999px] h-px w-px opacity-0"
+              />
 
-          <button type="submit" style={buttonStyle}>
-            Send Message
-          </button>
-        </form>
-      </section>
+              <div>
+                <label
+                  htmlFor="contact-name"
+                  className="mb-2 block font-bold"
+                >
+                  Your name
+                </label>
+
+                <input
+                  id="contact-name"
+                  name="name"
+                  type="text"
+                  required
+                  autoComplete="name"
+                  className="w-full rounded-lg border border-slate-600 bg-slate-900 px-4 py-3.5 text-base text-white outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="contact-email"
+                  className="mb-2 block font-bold"
+                >
+                  Your email
+                </label>
+
+                <input
+                  id="contact-email"
+                  name="email"
+                  type="email"
+                  required
+                  autoComplete="email"
+                  className="w-full rounded-lg border border-slate-600 bg-slate-900 px-4 py-3.5 text-base text-white outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="contact-phone"
+                  className="mb-2 block font-bold"
+                >
+                  Phone number{" "}
+                  <span className="font-normal text-slate-400">
+                    (optional)
+                  </span>
+                </label>
+
+                <input
+                  id="contact-phone"
+                  name="phone"
+                  type="tel"
+                  autoComplete="tel"
+                  className="w-full rounded-lg border border-slate-600 bg-slate-900 px-4 py-3.5 text-base text-white outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="contact-message"
+                  className="mb-2 block font-bold"
+                >
+                  How can we help?
+                </label>
+
+                <textarea
+                  id="contact-message"
+                  name="message"
+                  required
+                  rows={6}
+                  className="w-full rounded-lg border border-slate-600 bg-slate-900 px-4 py-3.5 text-base text-white outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="w-fit rounded-lg bg-orange-500 px-6 py-3.5 font-black text-white hover:bg-orange-600 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-300"
+              >
+                Send Message
+              </button>
+            </form>
+          )}
+        </section>
+      </main>
 
       <SupportFooter />
-    </main>
+    </>
   );
 }
-
-const fieldStyle = {
-  width: "100%",
-  borderRadius: "8px",
-  border: "1px solid #374151",
-  background: "#111827",
-  color: "white",
-  padding: "14px 16px",
-  fontSize: "16px",
-};
-
-const buttonStyle = {
-  width: "fit-content",
-  borderRadius: "8px",
-  background: "#dc2626",
-  color: "white",
-  padding: "14px 24px",
-  fontWeight: "bold",
-  border: "none",
-  cursor: "pointer",
-};

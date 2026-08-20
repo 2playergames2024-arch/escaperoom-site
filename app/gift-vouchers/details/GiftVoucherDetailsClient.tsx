@@ -1,54 +1,97 @@
 "use client";
 
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+
 import LocationHeader from "../../components/LocationHeader";
+import {
+  LOCATIONS,
+} from "../../data/locations";
+import {
+  trackClarityEvent,
+} from "../../lib/clarity";
 
 export default function GiftVoucherDetailsClient() {
-  const searchParams = useSearchParams();
+  const searchParams =
+    useSearchParams();
+
+  const locationParam =
+    searchParams.get("location");
 
   const location =
-    searchParams.get("location") === "cherry-hill"
-      ? "cherry-hill"
-      : "king-of-prussia";
+    locationParam ===
+    LOCATIONS.kingOfPrussia.slug
+      ? LOCATIONS.kingOfPrussia
+      : locationParam ===
+          LOCATIONS.cherryHill.slug
+        ? LOCATIONS.cherryHill
+        : null;
 
-  const isKingOfPrussia = location === "king-of-prussia";
+  if (!location) {
+    return (
+      <main className="min-h-screen bg-white px-6 py-16 text-slate-950">
+        <section className="mx-auto max-w-3xl rounded-[18px] border-2 border-slate-950 p-8 shadow-lg">
+          <p className="text-sm font-black uppercase tracking-[0.2em] text-orange-500">
+            Gift Vouchers
+          </p>
 
-  const locationName = isKingOfPrussia
-    ? "King of Prussia"
-    : "Cherry Hill";
+          <h1 className="mt-2 text-4xl font-black">
+            Choose a Location
+          </h1>
 
-  const locationSubtitle = isKingOfPrussia
-    ? "Pennsylvania"
-    : "New Jersey";
+          <p className="mt-6 text-lg">
+            Gift vouchers are location-specific.
+            Please choose the location where the voucher will be used.
+          </p>
 
-  const homeHref = isKingOfPrussia
-    ? "/locations/king-of-prussia"
-    : "/locations/cherry-hill";
+          <div className="mt-8 grid gap-4 sm:grid-cols-2">
+            <Link
+              href={`/gift-vouchers/details?location=${LOCATIONS.kingOfPrussia.slug}`}
+              className="rounded-lg bg-orange-500 px-6 py-4 text-center text-lg font-black text-white hover:bg-orange-600 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-300"
+            >
+              {LOCATIONS.kingOfPrussia.shortName}
+            </Link>
 
-  const roomsHref = isKingOfPrussia
-    ? "/locations/king-of-prussia#rooms"
-    : "/locations/cherry-hill#rooms";
+            <Link
+              href={`/gift-vouchers/details?location=${LOCATIONS.cherryHill.slug}`}
+              className="rounded-lg bg-orange-500 px-6 py-4 text-center text-lg font-black text-white hover:bg-orange-600 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-300"
+            >
+              {LOCATIONS.cherryHill.shortName}
+            </Link>
+          </div>
+        </section>
+      </main>
+    );
+  }
 
-  const bookHref = isKingOfPrussia
-    ? "/locations/king-of-prussia#book-now"
-    : "/locations/cherry-hill#book-now";
+  const otherLocation =
+    location.slug ===
+    LOCATIONS.cherryHill.slug
+      ? LOCATIONS.kingOfPrussia
+      : LOCATIONS.cherryHill;
 
-  const otherLocationHref = isKingOfPrussia
-    ? "/gift-vouchers/details?location=cherry-hill"
-    : "/gift-vouchers/details?location=king-of-prussia";
+  const otherLocationHref =
+    `/gift-vouchers/details?location=${otherLocation.slug}`;
 
-  const otherLocationName = isKingOfPrussia
-    ? "Cherry Hill"
-    : "King of Prussia";
+  const checkoutHref =
+    `/gift-vouchers/checkout?location=${location.slug}`;
 
   return (
     <>
       <LocationHeader
-        locationName={locationName}
-        locationSubtitle={locationSubtitle}
-        homeHref={homeHref}
-        roomsHref={roomsHref}
-        bookHref={bookHref}
+        locationName={`${location.shortName}, ${location.state}`}
+        locationSubtitle={
+          location.subtitle
+        }
+        homeHref={
+          location.homeHref
+        }
+        roomsHref={
+          location.roomsHref
+        }
+        bookHref={
+          location.bookHref
+        }
       />
 
       <main className="min-h-screen bg-white px-6 py-16 text-slate-950">
@@ -67,19 +110,24 @@ export default function GiftVoucherDetailsClient() {
             </p>
 
             <p className="mt-2 text-3xl font-black text-orange-600">
-              {locationName}
+              {location.shortName}
             </p>
 
             <p className="mt-6 text-lg">
-              Gift vouchers are valid only at this location.
+              Gift vouchers are valid only
+              at this location.
             </p>
 
-            <a
-              href={otherLocationHref}
-              className="mt-6 inline-block font-bold text-orange-600 hover:underline"
+            <Link
+              href={
+                otherLocationHref
+              }
+              className="mt-6 inline-block font-bold text-orange-600 hover:underline focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-300"
             >
-              Need a gift voucher for {otherLocationName} instead?
-            </a>
+              Need a gift voucher for{" "}
+              {otherLocation.shortName}{" "}
+              instead?
+            </Link>
           </div>
 
           <div className="mt-12 rounded-lg border-2 border-orange-500 bg-orange-50 p-6">
@@ -88,23 +136,25 @@ export default function GiftVoucherDetailsClient() {
             </h2>
 
             <p className="mt-4 text-lg">
-              Gift voucher purchases are securely processed by Bookeo.
-              Click Continue below to select your gift voucher,
-              enter the purchaser information, and complete payment.
+              Gift voucher purchases are
+              securely processed by Bookeo.
+              Click Continue below to select
+              your gift voucher, enter the
+              purchaser information, and
+              complete payment.
             </p>
 
-            <button
-              type="button"
+            <Link
+              href={checkoutHref}
               onClick={() => {
-                window.location.href =
-                  isKingOfPrussia
-                    ? "/gift-vouchers/checkout?location=king-of-prussia"
-                    : "/gift-vouchers/checkout?location=cherry-hill";
+                trackClarityEvent(
+                  "gift_voucher_checkout_started"
+                );
               }}
-              className="mt-8 w-full rounded-lg bg-orange-500 px-6 py-4 text-xl font-black text-white hover:bg-orange-600"
+              className="mt-8 block w-full rounded-lg bg-orange-500 px-6 py-4 text-center text-xl font-black text-white hover:bg-orange-600 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-300"
             >
               Continue
-            </button>
+            </Link>
           </div>
         </section>
       </main>

@@ -33,7 +33,7 @@ const faqs = [
   {
     question: "How much does it cost?",
     answer:
-      "Tickets are $35 per player plus applicable taxes. Your final price will always be displayed before payment is completed.",
+      "Tickets are $37 per player plus applicable taxes. Your final price will always be displayed before payment is completed.",
   },
   {
     question: "How many players do you recommend?",
