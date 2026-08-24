@@ -150,9 +150,7 @@ export default function RoomDetailPage({
               }}
             >
               <Link
-                href={
-                  location.bookHref
-                }
+                href={`${location.bookHref}?room=${room.slug}`}
                 className="rounded-full bg-orange-500 px-8 py-4 text-center text-lg font-black uppercase text-white hover:bg-orange-600"
               >
                 Book This Room
@@ -441,9 +439,7 @@ export default function RoomDetailPage({
           </p>
 
           <Link
-            href={
-              location.bookHref
-            }
+            href={`${location.bookHref}?room=${room.slug}`}
             className="inline-block rounded-full bg-slate-950 px-10 py-5 text-lg font-black uppercase text-white"
           >
             Book This Room

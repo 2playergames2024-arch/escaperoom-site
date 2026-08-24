@@ -236,7 +236,7 @@ export default function LocationLandingPage({
                         href={
                           room.detailHref
                         }
-                        className="flex-1 rounded-full border border-slate-300 px-5 py-3 text-center font-black uppercase"
+                        className="flex flex-1 items-center justify-center rounded-full border border-slate-300 px-5 py-3 text-center font-black uppercase"
                       >
                         Learn More
                       </Link>
@@ -245,7 +245,7 @@ export default function LocationLandingPage({
                         href={
                           roomBookHref
                         }
-                        className="flex-1 rounded-full bg-orange-500 px-5 py-3 text-center font-black uppercase text-white"
+                        className="flex flex-1 items-center justify-center rounded-full bg-orange-500 px-5 py-3 text-center font-black uppercase text-white"
                       >
                         Book
                       </Link>
