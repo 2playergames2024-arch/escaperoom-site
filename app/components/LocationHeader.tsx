@@ -9,6 +9,7 @@ type LocationHeaderProps = {
   homeHref: string;
   roomsHref: string;
   bookHref: string;
+  giftVoucherMode?: boolean;
 };
 
 export default function LocationHeader({
@@ -17,6 +18,7 @@ export default function LocationHeader({
   homeHref,
   roomsHref,
   bookHref,
+  giftVoucherMode = false,
 }: LocationHeaderProps) {
   const [locationMenuOpen, setLocationMenuOpen] = useState(false);
   const [navMenuOpen, setNavMenuOpen] = useState(false);
@@ -197,76 +199,85 @@ export default function LocationHeader({
           </nav>
         </>
 
-        {/* RIGHT: LOCATION + BOOK NOW */}
+        {/* RIGHT: LOCATION / BOOK NOW */}
         <div className="location-header-right">
-          {/* LOCATION SELECTOR */}
-          <div
-            ref={locationMenuRef}
-            className="location-selector-wrapper"
-          >
-            <button
-              type="button"
-              onClick={() =>
-                setLocationMenuOpen((current) => !current)
-              }
-              aria-expanded={locationMenuOpen}
-              aria-controls="location-dropdown-menu"
-              aria-label={`Change location. Current location: ${locationName}`}
-              className="location-selector"
+          {giftVoucherMode ? (
+            <div
+              className="gift-voucher-location-badge"
+              aria-label={`Gift voucher location: ${locationName}, ${locationSubtitle}`}
             >
-              <span className="location-name">
-                {locationName}
-              </span>
-
-              <span className="location-subtitle">
-                {locationSubtitle}
-              </span>
-            </button>
-
-            {locationMenuOpen && (
+              <span>{locationName}</span>
+              <small>{locationSubtitle}</small>
+            </div>
+          ) : (
+            <>
+              {/* LOCATION SELECTOR */}
               <div
-                id="location-dropdown-menu"
-                className="location-dropdown"
+                ref={locationMenuRef}
+                className="location-selector-wrapper"
               >
                 <button
                   type="button"
-                  onClick={() => setLocationMenuOpen(false)}
-                  className="location-dropdown-button"
+                  onClick={() =>
+                    setLocationMenuOpen((current) => !current)
+                  }
+                  aria-expanded={locationMenuOpen}
+                  aria-controls="location-dropdown-menu"
+                  aria-label={`Change location. Current location: ${locationName}`}
+                  className="location-selector"
                 >
-                  Stay at {currentLocationShortName}
+                  <span className="location-name">
+                    {locationName}
+                  </span>
+
+                  <span className="location-subtitle">
+                    {locationSubtitle}
+                  </span>
                 </button>
 
-                <p className="location-question">
-                  Looking for another location?
-                </p>
+                {locationMenuOpen && (
+                  <div
+                    id="location-dropdown-menu"
+                    className="location-dropdown"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setLocationMenuOpen(false)}
+                      className="location-dropdown-button"
+                    >
+                      Stay at {currentLocationShortName}
+                    </button>
 
-                <Link
-                  href={otherLocation.href}
-                  onClick={() => setLocationMenuOpen(false)}
-                  className="location-dropdown-button"
-                >
-                  Go to {otherLocation.shortName}
-                </Link>
+                    <p className="location-question">
+                      Looking for another location?
+                    </p>
 
-                <p className="location-warning">
-                  Please confirm your location before booking.
-                  Each location has different rooms and
-                  availability.
-                </p>
+                    <Link
+                      href={otherLocation.href}
+                      onClick={() => setLocationMenuOpen(false)}
+                      className="location-dropdown-button"
+                    >
+                      Go to {otherLocation.shortName}
+                    </Link>
+
+                    <p className="location-warning">
+                      Please confirm your location before booking.
+                      Each location has different rooms and availability.
+                    </p>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          {/* BOOK NOW */}
-          <Link
-            href={bookHref}
-            className="location-book-button"
-          >
-            Book Now
-          </Link>
+              <Link
+                href={bookHref}
+                className="location-book-button"
+              >
+                Book Now
+              </Link>
+            </>
+          )}
         </div>
       </div>
-
       <style jsx global>{`
         .location-header {
           position: sticky;
@@ -411,6 +422,34 @@ export default function LocationHeader({
           font-size: 12px;
           font-weight: 700;
           line-height: 1.1;
+        }
+
+        .gift-voucher-location-badge {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          min-height: 50px;
+          padding: 7px 12px;
+          text-align: center;
+          text-transform: uppercase;
+        }
+
+        .gift-voucher-location-badge span {
+          color: rgb(15 23 42);
+          font-size: 14px;
+          font-weight: 900;
+          line-height: 1.1;
+          white-space: nowrap;
+        }
+
+        .gift-voucher-location-badge small {
+          margin-top: 4px;
+          color: rgb(100 116 139);
+          font-size: 12px;
+          font-weight: 700;
+          line-height: 1.1;
+          white-space: nowrap;
         }
 
         .location-book-button {
@@ -627,6 +666,18 @@ export default function LocationHeader({
 
           .location-header-right {
             justify-self: end;
+          }
+        
+          .gift-voucher-location-badge {
+            padding: 6px 4px;
+          }
+
+          .gift-voucher-location-badge span {
+            font-size: 12px;
+          }
+
+          .gift-voucher-location-badge small {
+            font-size: 10px;
           }
         }
       `}</style>

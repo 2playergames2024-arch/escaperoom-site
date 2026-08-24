@@ -17,10 +17,10 @@ export default function GiftVoucherCheckoutClient() {
 
   const location =
     locationParam ===
-    LOCATIONS.kingOfPrussia.slug
+      LOCATIONS.kingOfPrussia.slug
       ? LOCATIONS.kingOfPrussia
       : locationParam ===
-          LOCATIONS.cherryHill.slug
+        LOCATIONS.cherryHill.slug
         ? LOCATIONS.cherryHill
         : null;
 
@@ -63,7 +63,7 @@ export default function GiftVoucherCheckoutClient() {
 
   const giftVoucherFile =
     location.slug ===
-    LOCATIONS.cherryHill.slug
+      LOCATIONS.cherryHill.slug
       ? "/bookeo-gift-ch.html"
       : "/bookeo-gift-kop.html";
 
@@ -80,13 +80,20 @@ export default function GiftVoucherCheckoutClient() {
         roomsHref={
           location.roomsHref
         }
-        bookHref={
-          location.bookHref
-        }
+        bookHref={location.bookHref}
+        giftVoucherMode
       />
 
       <main className="min-h-screen bg-white px-4 py-8">
         <div className="mx-auto max-w-5xl">
+          <div className="mb-4">
+            <a
+              href={`/gift-vouchers/details?location=${location.slug}`}
+              className="font-bold text-orange-600 hover:underline"
+            >
+              ← Change gift voucher location
+            </a>
+          </div>
           <iframe
             src={
               giftVoucherFile

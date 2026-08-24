@@ -20,10 +20,10 @@ export default function GiftVoucherDetailsClient() {
 
   const location =
     locationParam ===
-    LOCATIONS.kingOfPrussia.slug
+      LOCATIONS.kingOfPrussia.slug
       ? LOCATIONS.kingOfPrussia
       : locationParam ===
-          LOCATIONS.cherryHill.slug
+        LOCATIONS.cherryHill.slug
         ? LOCATIONS.cherryHill
         : null;
 
@@ -66,7 +66,7 @@ export default function GiftVoucherDetailsClient() {
 
   const otherLocation =
     location.slug ===
-    LOCATIONS.cherryHill.slug
+      LOCATIONS.cherryHill.slug
       ? LOCATIONS.kingOfPrussia
       : LOCATIONS.cherryHill;
 
@@ -89,9 +89,8 @@ export default function GiftVoucherDetailsClient() {
         roomsHref={
           location.roomsHref
         }
-        bookHref={
-          location.bookHref
-        }
+        bookHref={location.bookHref}
+        giftVoucherMode
       />
 
       <main className="min-h-screen bg-white px-6 py-16 text-slate-950">
