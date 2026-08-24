@@ -135,14 +135,14 @@ export default function LocationLandingPage({
                     href={
                       location.bookHref
                     }
-                    className="flex-1 rounded-full bg-orange-500 px-5 py-3 text-center font-black uppercase text-white"
+                    className="flex w-full items-center justify-center whitespace-nowrap rounded-full bg-orange-500 px-8 py-4 text-center text-lg font-black uppercase leading-none text-white hover:bg-orange-600 sm:w-auto lg:w-[210px]"
                   >
                     Book
                   </Link>
 
                   <a
                     href="#rooms"
-                    className="rounded-full border-2 border-white px-8 py-4 text-center text-lg font-black uppercase text-white hover:bg-white hover:text-slate-950"
+                    className="flex w-full items-center justify-center whitespace-nowrap rounded-full border-2 border-white px-8 py-4 text-center text-lg font-black uppercase leading-none text-white hover:bg-white hover:text-slate-950 sm:w-auto lg:w-[210px]"
                   >
                     View Rooms
                   </a>

@@ -262,12 +262,12 @@ function PaymentPageContent() {
   return (
     <main className="min-h-screen bg-white px-6 py-16 text-slate-950">
       <section className="mx-auto max-w-3xl rounded-[18px] border-2 border-slate-950 p-8 shadow-lg">
-        <p className="text-sm font-black uppercase tracking-[0.2em] text-orange-500">
+        {/* <p className="text-sm font-black uppercase tracking-[0.2em] text-orange-500">
           Payment
-        </p>
+        </p> */}
 
         <h1 className="mt-2 text-4xl font-black">
-          Review & Pay
+          Review
         </h1>
 
         <div className="mt-8 grid gap-3 text-lg font-bold">
@@ -375,9 +375,7 @@ function PaymentPageContent() {
         >
           {isPaying
             ? "Starting Payment..."
-            : `Pay $${finalTotal.toFixed(
-              2
-            )}`}
+            : "Proceed to Checkout"}
         </button>
 
         <Link

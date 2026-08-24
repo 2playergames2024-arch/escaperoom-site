@@ -149,10 +149,10 @@ export async function POST(
     await incrementRateLimit(
       redis,
       rateLimitKey,
-      600
+      180
     );
 
-  if (attempts > 5) {
+  if (attempts > 10) {
     return NextResponse.json(
       {
         error:
@@ -161,7 +161,7 @@ export async function POST(
       {
         status: 429,
         headers: {
-          "Retry-After": "600",
+          "Retry-After": "180",
         },
       }
     );

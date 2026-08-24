@@ -541,16 +541,6 @@ export default function LocationBookingPage({
       today
     );
 
-  const anyLoading =
-    rooms.some(
-      (room) =>
-        (
-          availabilityStatus[
-          room.productId
-          ] ?? "loading"
-        ) === "loading"
-    );
-
   const selectedRoom =
     rooms.find(
       (room) =>
@@ -591,7 +581,7 @@ export default function LocationBookingPage({
         </section>
 
         <section className="mx-auto max-w-7xl px-6 py-3">
-          <div className="mx-auto mb-3 grid w-full max-w-xl grid-cols-[52px_minmax(0,1fr)_52px] items-center text-center">
+          <div className="sticky top-[76px] z-30 mx-auto mb-8 grid w-full max-w-xl grid-cols-[52px_minmax(0,1fr)_52px] items-center bg-white py-2 text-center shadow-sm">
             <button
               type="button"
               onClick={() =>
@@ -672,17 +662,6 @@ export default function LocationBookingPage({
             </button>
           </div>
 
-          {anyLoading && (
-            <p
-              role="status"
-              aria-live="polite"
-              className="mb-6 text-center text-sm font-black uppercase tracking-[0.2em] text-orange-500"
-            >
-              Loading live
-              availability...
-            </p>
-          )}
-
           {selectedRoom && (
             <div className="mb-8 rounded-2xl border-2 border-orange-500 bg-orange-50 px-6 py-5 text-center">
               <p className="text-sm font-black uppercase tracking-[0.18em] text-orange-500">
@@ -759,8 +738,8 @@ export default function LocationBookingPage({
                       </div>
                     </div>
 
-                    <div className="border-t-2 border-slate-950 p-5">
-                      <h3 className="mb-1 text-xl font-black uppercase">
+                    <div className="min-h-[400px] border-t-2 border-slate-950 p-5">
+                      <h3 className="mb-1 text-xl font-black uppercase md:min-h-[56px]">
                         {
                           room.name
                         }
