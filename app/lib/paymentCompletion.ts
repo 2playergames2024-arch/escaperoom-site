@@ -42,45 +42,45 @@ type PurchaseAnalytics = {
 
 export type VerifyPaymentResult =
   | {
-      ok: true;
-      verifiedPayment: VerifiedPayment;
-    }
+    ok: true;
+    verifiedPayment: VerifiedPayment;
+  }
   | {
-      ok: false;
-      pending?: boolean;
-      error: string;
-    };
+    ok: false;
+    pending?: boolean;
+    error: string;
+  };
 
 export type FinalizeBookingResult =
   | {
-      ok: true;
-      bookingId: string;
-      alreadyFinalized?: boolean;
-      purchase: PurchaseAnalytics | null;
-    }
+    ok: true;
+    bookingId: string;
+    alreadyFinalized?: boolean;
+    purchase: PurchaseAnalytics | null;
+  }
   | {
-      ok: false;
-      recoveryRequired?: boolean;
-      retryable?: boolean;
-      status: number;
-      error: string;
-    };
+    ok: false;
+    recoveryRequired?: boolean;
+    retryable?: boolean;
+    status: number;
+    error: string;
+  };
 
 export type CompletePaidBookingResult =
   | {
-      ok: true;
-      bookingId: string;
-      alreadyFinalized?: boolean;
-      purchase: PurchaseAnalytics | null;
-    }
+    ok: true;
+    bookingId: string;
+    alreadyFinalized?: boolean;
+    purchase: PurchaseAnalytics | null;
+  }
   | {
-      ok: false;
-      pending?: boolean;
-      recoveryRequired?: boolean;
-      retryable?: boolean;
-      status: number;
-      error: string;
-    };
+    ok: false;
+    pending?: boolean;
+    recoveryRequired?: boolean;
+    retryable?: boolean;
+    status: number;
+    error: string;
+  };
 
 async function loadBookingSession(
   sessionId: string
@@ -347,7 +347,7 @@ export async function verifyAuthorizePaymentForSession(
     if (
       !response.ok ||
       data?.messages?.resultCode !==
-        "Ok" ||
+      "Ok" ||
       !data?.transaction
     ) {
       console.error(
@@ -385,7 +385,7 @@ export async function verifyAuthorizePaymentForSession(
       ) &&
       Math.abs(
         expectedAmount -
-          actualAmount
+        actualAmount
       ) < 0.001;
 
     const acceptableStatuses = [
@@ -396,7 +396,7 @@ export async function verifyAuthorizePaymentForSession(
     const transactionStatus =
       String(
         transaction.transactionStatus ||
-          ""
+        ""
       );
 
     const statusIsValid =
@@ -426,19 +426,19 @@ export async function verifyAuthorizePaymentForSession(
 
     const verifiedPayment:
       VerifiedPayment = {
-        sessionId,
+      sessionId,
 
-        transactionId:
-          authorizeEvent.transactionId,
+      transactionId:
+        authorizeEvent.transactionId,
 
-        amount:
-          actualAmount.toFixed(2),
+      amount:
+        actualAmount.toFixed(2),
 
-        transactionStatus,
+      transactionStatus,
 
-        verifiedAt:
-          Date.now(),
-      };
+      verifiedAt:
+        Date.now(),
+    };
 
     await redis.set(
       `verified-payment:${sessionId}`,
@@ -458,9 +458,9 @@ export async function verifyAuthorizePaymentForSession(
       error instanceof Error &&
       (
         error.name ===
-          "TimeoutError" ||
+        "TimeoutError" ||
         error.name ===
-          "AbortError"
+        "AbortError"
       );
 
     console.error(
@@ -509,11 +509,11 @@ export async function finalizeBookeoBookingForSession(
       session.location ===
         LOCATIONS.cherryHill.slug
         ? process.env
-            .BOOKEO_CH_API_KEY
+          .BOOKEO_CH_API_KEY
         : session.location ===
-            LOCATIONS.kingOfPrussia.slug
+          LOCATIONS.kingOfPrussia.slug
           ? process.env
-              .BOOKEO_KOP_API_KEY
+            .BOOKEO_KOP_API_KEY
           : null;
 
     const BOOKEO_SECRET_KEY =
@@ -568,9 +568,9 @@ export async function finalizeBookeoBookingForSession(
     if (
       existingOrphan &&
       existingOrphan.status ===
-        "needs_recovery" &&
+      "needs_recovery" &&
       existingOrphan.failureType !==
-        "payment_received_pending_finalization"
+      "payment_received_pending_finalization"
     ) {
       return {
         ok: false,
@@ -610,7 +610,7 @@ export async function finalizeBookeoBookingForSession(
 
     if (
       verifiedPayment.sessionId !==
-        sessionId ||
+      sessionId ||
       !Number.isFinite(
         expectedAmount
       ) ||
@@ -619,7 +619,7 @@ export async function finalizeBookeoBookingForSession(
       ) ||
       Math.abs(
         expectedAmount -
-          verifiedAmount
+        verifiedAmount
       ) >= 0.001
     ) {
       return {
@@ -695,9 +695,9 @@ export async function finalizeBookeoBookingForSession(
     if (
       orphanAfterLock &&
       orphanAfterLock.status ===
-        "needs_recovery" &&
+      "needs_recovery" &&
       orphanAfterLock.failureType !==
-        "payment_received_pending_finalization"
+      "payment_received_pending_finalization"
     ) {
       return {
         ok: false,
@@ -714,7 +714,9 @@ export async function finalizeBookeoBookingForSession(
       `https://api.bookeo.com/v2/bookings` +
       `?previousHoldId=${encodeURIComponent(
         session.holdId
-      )}`;
+      )}` +
+      `&notifyUsers=true` +
+      `&notifyCustomer=true`;
 
     const response =
       await fetch(
@@ -777,14 +779,14 @@ export async function finalizeBookeoBookingForSession(
                 phoneNumbers:
                   session.phone
                     ? [
-                        {
-                          number:
-                            session.phone,
+                      {
+                        number:
+                          session.phone,
 
-                          type:
-                            "mobile",
-                        },
-                      ]
+                        type:
+                          "mobile",
+                      },
+                    ]
                     : [],
               },
 
@@ -823,61 +825,61 @@ export async function finalizeBookeoBookingForSession(
     if (!response.ok) {
       const orphan:
         OrphanPayment = {
-          sessionId,
+        sessionId,
 
-          transactionId:
-            verifiedPayment.transactionId,
+        transactionId:
+          verifiedPayment.transactionId,
 
-          amount:
-            verifiedPayment.amount,
+        amount:
+          verifiedPayment.amount,
 
-          holdId:
-            session.holdId,
+        holdId:
+          session.holdId,
 
-          productId:
-            session.productId,
+        productId:
+          session.productId,
 
-          eventId:
-            session.eventId,
+        eventId:
+          session.eventId,
 
-          players:
-            session.players,
+        players:
+          session.players,
 
-          location:
-            session.location,
+        location:
+          session.location,
 
-          date:
-            session.date,
+        date:
+          session.date,
 
-          time:
-            session.time,
+        time:
+          session.time,
 
-          firstName:
-            session.firstName,
+        firstName:
+          session.firstName,
 
-          lastName:
-            session.lastName,
+        lastName:
+          session.lastName,
 
-          email:
-            session.email,
+        email:
+          session.email,
 
-          phone:
-            session.phone,
+        phone:
+          session.phone,
 
-          bookeoError: {
-            status:
-              response.status,
-          },
-
-          createdAt:
-            Date.now(),
-
+        bookeoError: {
           status:
-            "needs_recovery",
+            response.status,
+        },
 
-          failureType:
-            "bookeo_rejected",
-        };
+        createdAt:
+          Date.now(),
+
+        status:
+          "needs_recovery",
+
+        failureType:
+          "bookeo_rejected",
+      };
 
       await redis.set(
         `orphan-payment:${sessionId}`,
@@ -918,7 +920,7 @@ export async function finalizeBookeoBookingForSession(
     const bookingNumber =
       String(
         data?.bookingNumber ||
-          ""
+        ""
       );
 
     if (!bookingNumber) {
@@ -994,63 +996,63 @@ export async function finalizeBookeoBookingForSession(
       ) {
         const orphan:
           OrphanPayment = {
-            sessionId,
+          sessionId,
 
-            transactionId:
-              verifiedPayment.transactionId,
+          transactionId:
+            verifiedPayment.transactionId,
 
-            amount:
-              verifiedPayment.amount,
+          amount:
+            verifiedPayment.amount,
 
-            holdId:
-              session.holdId,
+          holdId:
+            session.holdId,
 
-            productId:
-              session.productId,
+          productId:
+            session.productId,
 
-            eventId:
-              session.eventId,
+          eventId:
+            session.eventId,
 
-            players:
-              session.players,
+          players:
+            session.players,
 
-            location:
-              session.location,
+          location:
+            session.location,
 
-            date:
-              session.date,
+          date:
+            session.date,
 
-            time:
-              session.time,
+          time:
+            session.time,
 
-            firstName:
-              session.firstName,
+          firstName:
+            session.firstName,
 
-            lastName:
-              session.lastName,
+          lastName:
+            session.lastName,
 
-            email:
-              session.email,
+          email:
+            session.email,
 
-            phone:
-              session.phone,
+          phone:
+            session.phone,
 
-            bookeoError: {
-              errorType:
-                error instanceof Error
-                  ? error.name
-                  : "unknown",
-            },
+          bookeoError: {
+            errorType:
+              error instanceof Error
+                ? error.name
+                : "unknown",
+          },
 
-            createdAt:
-              Date.now(),
+          createdAt:
+            Date.now(),
 
-            status:
-              "needs_recovery",
+          status:
+            "needs_recovery",
 
-            failureType:
-              "uncertain",
-          };
+          failureType:
+            "uncertain",
+        };
 
         await redis.set(
           `orphan-payment:${sessionId}`,
