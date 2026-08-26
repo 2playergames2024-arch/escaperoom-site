@@ -1,7 +1,5 @@
-import LocationBookingPage from "../../../components/LocationBookingPage";
+import { redirect } from "next/navigation";
 
 export default function CherryHillBookNowPage() {
-  return (
-    <LocationBookingPage locationSlug="cherry-hill" />
-  );
+  redirect("/booking-temporarily-unavailable");
 }

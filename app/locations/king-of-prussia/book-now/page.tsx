@@ -1,7 +1,5 @@
-import LocationBookingPage from "../../../components/LocationBookingPage";
+import { redirect } from "next/navigation";
 
 export default function KingOfPrussiaBookNowPage() {
-  return (
-    <LocationBookingPage locationSlug="king-of-prussia" />
-  );
+  redirect("/booking-temporarily-unavailable");
 }

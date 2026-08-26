@@ -20,6 +20,18 @@ const HOSTED_TOKEN_REUSE_MS =
   14 * 60 * 1000;
 
 export async function POST(req: Request) {
+  const BOOKING_TEMPORARILY_DISABLED = true;
+
+  if (BOOKING_TEMPORARILY_DISABLED) {
+    return NextResponse.json(
+      {
+        error:
+          "Online booking is temporarily unavailable. Please contact Escape Room Mystery for assistance.",
+      },
+      { status: 503 }
+    );
+  }
+
   const forwardedFor =
     req.headers.get("x-forwarded-for");
 
@@ -170,17 +182,17 @@ export async function POST(req: Request) {
 
     if (
       trustedHold.holdId !==
-        session.holdId ||
+      session.holdId ||
       trustedHold.productId !==
-        session.productId ||
+      session.productId ||
       trustedHold.eventId !==
-        session.eventId ||
+      session.eventId ||
       trustedHold.players !==
-        session.players ||
+      session.players ||
       trustedHold.location !==
-        session.location ||
+      session.location ||
       trustedHold.total !==
-        session.total
+      session.total
     ) {
       return NextResponse.json(
         {
@@ -230,9 +242,9 @@ export async function POST(req: Request) {
 
     if (
       session.location !==
-        LOCATIONS.kingOfPrussia.slug &&
+      LOCATIONS.kingOfPrussia.slug &&
       session.location !==
-        LOCATIONS.cherryHill.slug
+      LOCATIONS.cherryHill.slug
     ) {
       return NextResponse.json(
         {
@@ -306,7 +318,7 @@ export async function POST(req: Request) {
 
     if (
       existingAttempt?.status ===
-        "paid"
+      "paid"
     ) {
       return NextResponse.json(
         {
@@ -321,7 +333,7 @@ export async function POST(req: Request) {
 
     if (
       existingAttempt?.status ===
-        "ready" &&
+      "ready" &&
       existingAttempt.token &&
       existingAttempt.paymentUrl &&
       existingAttempt.tokenIssuedAt
@@ -365,7 +377,7 @@ export async function POST(req: Request) {
 
     if (
       existingAttempt?.status ===
-        "creating"
+      "creating"
     ) {
       const creationAge =
         Date.now() -
@@ -401,17 +413,17 @@ export async function POST(req: Request) {
 
     const paymentAttempt:
       PaymentAttempt = {
-        sessionId,
-        claimId:
-          paymentAttemptClaimId,
-        session,
-        status:
-          "creating",
-        createdAt:
-          now,
-        updatedAt:
-          now,
-      };
+      sessionId,
+      claimId:
+        paymentAttemptClaimId,
+      session,
+      status:
+        "creating",
+      createdAt:
+        now,
+      updatedAt:
+        now,
+    };
 
     const attemptClaim =
       await redis.set(
@@ -432,13 +444,13 @@ export async function POST(req: Request) {
 
       if (
         racedAttempt?.status ===
-          "ready" &&
+        "ready" &&
         racedAttempt.token &&
         racedAttempt.paymentUrl &&
         racedAttempt.tokenIssuedAt &&
         Date.now() -
-          racedAttempt.tokenIssuedAt <=
-          HOSTED_TOKEN_REUSE_MS
+        racedAttempt.tokenIssuedAt <=
+        HOSTED_TOKEN_REUSE_MS
       ) {
         return NextResponse.json({
           token:
@@ -668,9 +680,9 @@ export async function POST(req: Request) {
 
       if (
         currentAttempt?.claimId ===
-          paymentAttemptClaimId &&
+        paymentAttemptClaimId &&
         currentAttempt.status ===
-          "creating"
+        "creating"
       ) {
         await redis.del(
           paymentAttemptKey
@@ -697,7 +709,7 @@ export async function POST(req: Request) {
     if (
       !currentAttempt ||
       currentAttempt.claimId !==
-        paymentAttemptClaimId
+      paymentAttemptClaimId
     ) {
       console.error(
         "Payment attempt ownership changed before token storage.",
@@ -720,16 +732,16 @@ export async function POST(req: Request) {
 
     const readyAttempt:
       PaymentAttempt = {
-        ...currentAttempt,
-        status:
-          "ready",
-        token:
-          String(data.token),
-        paymentUrl,
+      ...currentAttempt,
+      status:
+        "ready",
+      token:
+        String(data.token),
+      paymentUrl,
+      tokenIssuedAt,
+      updatedAt:
         tokenIssuedAt,
-        updatedAt:
-          tokenIssuedAt,
-      };
+    };
 
     await redis.set(
       paymentAttemptKey,
@@ -762,9 +774,9 @@ export async function POST(req: Request) {
 
         if (
           currentAttempt?.claimId ===
-            paymentAttemptClaimId &&
+          paymentAttemptClaimId &&
           currentAttempt.status ===
-            "creating"
+          "creating"
         ) {
           await redis.del(
             paymentAttemptKey
@@ -787,9 +799,9 @@ export async function POST(req: Request) {
       error instanceof Error &&
       (
         error.name ===
-          "TimeoutError" ||
+        "TimeoutError" ||
         error.name ===
-          "AbortError"
+        "AbortError"
       );
 
     console.error(

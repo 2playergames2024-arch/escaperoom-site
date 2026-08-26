@@ -256,6 +256,11 @@ function PaymentPageContent() {
   const tax =
     Number(session.tax);
 
+  const taxLabel =
+    session.location === "king-of-prussia"
+      ? "Amusement Tax"
+      : "Sales Tax";
+
   const finalTotal =
     Number(session.total);
 
@@ -300,7 +305,7 @@ function PaymentPageContent() {
 
             <div className="mt-2 flex justify-between">
               <span>
-                Tax
+                {taxLabel}
               </span>
 
               <span>
