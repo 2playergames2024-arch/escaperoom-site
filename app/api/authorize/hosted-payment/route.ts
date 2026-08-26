@@ -20,7 +20,8 @@ const HOSTED_TOKEN_REUSE_MS =
   14 * 60 * 1000;
 
 export async function POST(req: Request) {
-  const BOOKING_TEMPORARILY_DISABLED = true;
+  const BOOKING_TEMPORARILY_DISABLED =
+    process.env.BOOKING_TEMPORARILY_DISABLED === "true";
 
   if (BOOKING_TEMPORARILY_DISABLED) {
     return NextResponse.json(
