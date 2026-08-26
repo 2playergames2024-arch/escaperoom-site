@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
 import { createHmac, timingSafeEqual } from "crypto";
 import { Resend } from "resend";
@@ -10,6 +10,8 @@ import {
   type OrphanPayment,
   isValidBookingSessionId,
 } from "../../../lib/booking";
+
+import { completePaidBooking } from "../../../lib/paymentCompletion";
 
 const redis = Redis.fromEnv();
 
@@ -175,7 +177,7 @@ export async function POST(req: Request) {
 
     if (
       receivedBuffer.length !==
-        calculatedBuffer.length ||
+      calculatedBuffer.length ||
       !timingSafeEqual(
         receivedBuffer,
         calculatedBuffer
@@ -304,7 +306,7 @@ export async function POST(req: Request) {
 
     if (
       paymentAttempt.session.sessionId !==
-        sessionId
+      sessionId
     ) {
       console.error(
         "Payment-attempt session mismatch.",
@@ -328,12 +330,12 @@ export async function POST(req: Request) {
 
     const authorizeEvent:
       AuthorizeEvent = {
-        eventType,
-        transactionId,
-        sessionId,
-        receivedAt:
-          Date.now(),
-      };
+      eventType,
+      transactionId,
+      sessionId,
+      receivedAt:
+        Date.now(),
+    };
 
     /*
      * First successful transaction wins.
@@ -361,7 +363,7 @@ export async function POST(req: Request) {
 
       if (
         existingEvent?.transactionId ===
-          transactionId
+        transactionId
       ) {
         /*
          * Harmless webhook redelivery. Continue
@@ -374,16 +376,16 @@ export async function POST(req: Request) {
       ) {
         const incident:
           DuplicatePaymentIncident = {
-            sessionId,
-            originalTransactionId:
-              existingEvent.transactionId,
-            duplicateTransactionId:
-              transactionId,
-            detectedAt:
-              Date.now(),
-            booking:
-              paymentAttempt.session,
-          };
+          sessionId,
+          originalTransactionId:
+            existingEvent.transactionId,
+          duplicateTransactionId:
+            transactionId,
+          detectedAt:
+            Date.now(),
+          booking:
+            paymentAttempt.session,
+        };
 
         await redis.set(
           `duplicate-payment:${sessionId}:${transactionId}`,
@@ -430,14 +432,14 @@ export async function POST(req: Request) {
 
     const paidAttempt:
       PaymentAttempt = {
-        ...paymentAttempt,
-        status:
-          "paid",
-        transactionId,
+      ...paymentAttempt,
+      status:
+        "paid",
+      transactionId,
+      paidAt,
+      updatedAt:
         paidAt,
-        updatedAt:
-          paidAt,
-      };
+    };
 
     await redis.set(
       paymentAttemptKey,
@@ -460,43 +462,43 @@ export async function POST(req: Request) {
 
     const paidPending:
       OrphanPayment = {
-        sessionId,
-        transactionId,
-        amount:
-          booking.total,
-        holdId:
-          booking.holdId,
-        productId:
-          booking.productId,
-        eventId:
-          booking.eventId,
-        players:
-          booking.players,
-        location:
-          booking.location,
-        date:
-          booking.date,
-        time:
-          booking.time,
-        firstName:
-          booking.firstName,
-        lastName:
-          booking.lastName,
-        email:
-          booking.email,
-        phone:
-          booking.phone,
-        bookeoError: {
-          stage:
-            "payment_received_pending_finalization",
-        },
-        createdAt:
-          paidAt,
-        status:
-          "needs_recovery",
-        failureType:
+      sessionId,
+      transactionId,
+      amount:
+        booking.total,
+      holdId:
+        booking.holdId,
+      productId:
+        booking.productId,
+      eventId:
+        booking.eventId,
+      players:
+        booking.players,
+      location:
+        booking.location,
+      date:
+        booking.date,
+      time:
+        booking.time,
+      firstName:
+        booking.firstName,
+      lastName:
+        booking.lastName,
+      email:
+        booking.email,
+      phone:
+        booking.phone,
+      bookeoError: {
+        stage:
           "payment_received_pending_finalization",
-      };
+      },
+      createdAt:
+        paidAt,
+      status:
+        "needs_recovery",
+      failureType:
+        "payment_received_pending_finalization",
+    };
 
     await redis.set(
       `orphan-payment:${sessionId}`,
@@ -507,6 +509,48 @@ export async function POST(req: Request) {
           PAYMENT_STATE_TTL_SECONDS,
       }
     );
+
+    /*
+     * Complete the paid booking server-side after the
+     * webhook response is ready. The customer's browser
+     * is no longer required to return from Authorize.Net
+     * in order for Bookeo finalization to occur.
+     */
+    after(async () => {
+      try {
+        const result =
+          await completePaidBooking(
+            sessionId
+          );
+
+        if (!result.ok) {
+          console.error(
+            "Automatic paid-booking completion did not finish successfully.",
+            {
+              sessionId,
+              status:
+                result.status,
+              pending:
+                result.pending || false,
+              recoveryRequired:
+                result.recoveryRequired ||
+                false,
+            }
+          );
+        }
+      } catch (error) {
+        console.error(
+          "Automatic paid-booking completion failed unexpectedly.",
+          {
+            sessionId,
+            error:
+              error instanceof Error
+                ? error.name
+                : "unknown",
+          }
+        );
+      }
+    });
 
     return NextResponse.json({
       received: true,
