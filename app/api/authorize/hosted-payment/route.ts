@@ -563,7 +563,7 @@ export async function POST(req: Request) {
                     returnUrl,
 
                   urlText:
-                    "Continue to Booking Confirmation",
+                    "Confirm Booking",
 
                   cancelUrl,
 
