@@ -1,3 +1,4 @@
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
 import { incrementRateLimit } from "@/app/lib/rateLimit";
@@ -10,6 +11,10 @@ import {
   type FinalizedBooking,
   isValidBookingSessionId,
 } from "../../../lib/booking";
+import {
+  BOOKING_TEST_COOKIE_NAME,
+  isValidBookingTestCookie,
+} from "../../../lib/bookingTestAccess";
 
 const redis = Redis.fromEnv();
 
@@ -23,7 +28,20 @@ export async function POST(req: Request) {
   const BOOKING_TEMPORARILY_DISABLED =
     process.env.BOOKING_TEMPORARILY_DISABLED === "true";
 
-  if (BOOKING_TEMPORARILY_DISABLED) {
+  const cookieStore =
+    await cookies();
+
+  const hasStaffAccess =
+    isValidBookingTestCookie(
+      cookieStore.get(
+        BOOKING_TEST_COOKIE_NAME
+      )?.value
+    );
+
+  if (
+    BOOKING_TEMPORARILY_DISABLED &&
+    !hasStaffAccess
+  ) {
     return NextResponse.json(
       {
         error:
