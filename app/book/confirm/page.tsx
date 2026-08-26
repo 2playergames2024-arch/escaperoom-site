@@ -1,174 +1,255 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import { isValidBookingSessionId } from "../../lib/booking";
+import {
+  Suspense,
+  useEffect,
+  useState,
+} from "react";
+
+import {
+  useSearchParams,
+} from "next/navigation";
+
+import {
+  isValidBookingSessionId,
+} from "../../lib/booking";
+
 import {
   trackClarityEvent,
 } from "../../lib/clarity";
+
 import {
   trackGa4Purchase,
   type Ga4Purchase,
 } from "../../lib/googleAnalytics";
 
+import Link from "next/link";
+
 function ConfirmPageContent() {
-  const searchParams = useSearchParams();
+  const searchParams =
+    useSearchParams();
 
-  const [status, setStatus] = useState("Verifying your payment...");
-  const [bookingId, setBookingId] = useState("");
-  const [canRetry, setCanRetry] = useState(false);
-  const [retryTrigger, setRetryTrigger] = useState(0);
+  const sessionId =
+    searchParams.get(
+      "sessionId"
+    ) || "";
 
-  const sessionId = searchParams.get("sessionId") || "";
-  const validSessionId = isValidBookingSessionId(sessionId);
+  const validSessionId =
+    isValidBookingSessionId(
+      sessionId
+    );
+
+  const [status, setStatus] =
+    useState(
+      "Payment received. Confirming your reservation..."
+    );
+
+  const [bookingId, setBookingId] =
+    useState("");
+
+  const [needsRecovery, setNeedsRecovery] =
+    useState(false);
+
+  const [location, setLocation] =
+    useState("");
 
   useEffect(() => {
-    async function completeBooking() {
-      setCanRetry(false);
+    if (!validSessionId) {
+      return;
+    }
 
+    let cancelled = false;
+
+    let purchaseTracked = false;
+
+    async function checkStatus() {
       try {
-        /*
-         * STEP 1:
-         * Independently verify the Authorize.net transaction.
-         *
-         * The webhook can sometimes arrive a few seconds after the
-         * customer reaches this page, so retry briefly if necessary.
-         */
-        let paymentVerified = false;
-
-        for (let attempt = 0; attempt < 10; attempt++) {
-          const verifyRes = await fetch(
-            "/api/authorize/verify-payment",
+        const response =
+          await fetch(
+            "/api/booking-status",
             {
               method: "POST",
+
               headers: {
-                "Content-Type": "application/json",
+                "Content-Type":
+                  "application/json",
               },
-              body: JSON.stringify({
-                sessionId,
-              }),
+
+              body:
+                JSON.stringify({
+                  sessionId,
+                }),
+
+              cache:
+                "no-store",
             }
           );
 
-          const verifyData = await verifyRes.json();
+        const data =
+          await response.json();
 
-          if (verifyRes.ok && verifyData.verified) {
-            paymentVerified = true;
-            break;
-          }
+        if (cancelled) {
+          return true;
+        }
 
-          if (verifyData.pending) {
-            setStatus("Payment received. Verifying your payment...");
+        if (
+          response.ok &&
+          data.status ===
+          "confirmed"
+        ) {
+          setBookingId(
+            data.bookingId || ""
+          );
 
-            await new Promise((resolve) =>
-              setTimeout(resolve, 2000)
+          setLocation(
+            data.location || ""
+          );
+
+          setStatus(
+            "Your booking is confirmed."
+          );
+
+          setNeedsRecovery(
+            false
+          );
+
+          if (
+            data.purchase &&
+            !purchaseTracked
+          ) {
+            trackGa4Purchase(
+              data.purchase as
+              Ga4Purchase
             );
 
-            continue;
+            purchaseTracked =
+              true;
           }
 
-          setStatus(
-            "We could not verify your payment automatically. Please try confirming again or contact us for assistance."
+          trackClarityEvent(
+            "booking_completed"
           );
-          setCanRetry(true);
-          return;
+
+          return true;
         }
 
-        if (!paymentVerified) {
+        if (
+          response.ok &&
+          data.status ===
+          "needs_recovery"
+        ) {
           setStatus(
-            "Your payment is still being verified. Please try confirming again in a moment or contact us if your confirmation does not arrive shortly."
+            "Your payment was received, but your reservation needs our attention. Our staff has been alerted. Do not make another booking."
           );
-          setCanRetry(true);
-          return;
-        }
 
-        /*
-         * STEP 2:
-         * Payment has now been independently verified.
-         * Ask our protected Bookeo endpoint to finalize the booking.
-         */
-        setStatus("Payment verified. Finalizing your booking...");
+          setNeedsRecovery(
+            true
+          );
 
-        const res = await fetch("/api/bookeo/finalize", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            sessionId,
-          }),
-        });
-
-        const data = await res.json();
-
-        if (!res.ok) {
           trackClarityEvent(
             "booking_finalization_failed"
           );
 
-          if (
-            data?.recoveryRequired ||
-            data?.retryable === false
-          ) {
-            setStatus(
-              "Your payment was received. We are verifying your reservation and have alerted our staff. Do not make another booking."
-            );
+          return true;
+        }
 
-            setCanRetry(false);
-            return;
-          }
-
+        if (
+          response.ok &&
+          data.status ===
+          "finalizing"
+        ) {
           setStatus(
-            "Your payment was received, but the booking could not be finalized automatically. Please try confirming again or contact us."
+            "Payment verified. Finalizing your reservation..."
           );
 
-          setCanRetry(true);
-          return;
+          return false;
         }
 
-        setBookingId(
-          data?.data?.id || ""
-        );
+        if (
+          response.ok &&
+          data.status ===
+          "payment_received"
+        ) {
+          setStatus(
+            "Payment received. Confirming your reservation..."
+          );
+
+          return false;
+        }
 
         setStatus(
-          "Your booking is confirmed."
+          "Confirming your payment and reservation..."
         );
 
-        const purchase =
-          data?.purchase as
-            | Ga4Purchase
-            | undefined;
-
-        if (purchase) {
-          trackGa4Purchase(
-            purchase
-          );
-        }
-
-        trackClarityEvent(
-          "booking_completed"
-        );
+        return false;
       } catch {
-        trackClarityEvent(
-          "booking_finalization_failed"
-        );
+        if (!cancelled) {
+          setStatus(
+            "Your payment may have been received. We are still checking your reservation status..."
+          );
+        }
 
-        setStatus(
-          "Your payment may have been received, but we could not complete the booking automatically. Please try confirming again or contact us."
-        );
-
-        setCanRetry(true);
+        return false;
       }
     }
 
-    if (validSessionId) {
-      completeBooking();
-    }
-  }, [sessionId, validSessionId, retryTrigger]);
+    async function monitorBooking() {
+      /*
+       * Poll for up to about two minutes.
+       * The webhook normally completes much faster,
+       * but this gives Authorize.Net and Bookeo time
+       * during a temporarily slow response.
+       */
+      for (
+        let attempt = 0;
+        attempt < 60;
+        attempt++
+      ) {
+        if (cancelled) {
+          return;
+        }
 
-  const displayedStatus = validSessionId
-    ? status
-    : "Booking session was missing. Please contact us for assistance.";
+        const finished =
+          await checkStatus();
+
+        if (finished) {
+          return;
+        }
+
+        await new Promise(
+          (resolve) =>
+            setTimeout(
+              resolve,
+              2000
+            )
+        );
+      }
+
+      if (!cancelled) {
+        setStatus(
+          "Your payment may have been received, but your reservation is taking longer than expected to confirm. Please do not make another booking. Contact us if confirmation does not arrive shortly."
+        );
+
+        setNeedsRecovery(
+          true
+        );
+      }
+    }
+
+    monitorBooking();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    sessionId,
+    validSessionId,
+  ]);
+
+  const displayedStatus =
+    validSessionId
+      ? status
+      : "Booking session was missing. Please contact us for assistance.";
 
   return (
     <main className="min-h-screen bg-white px-6 py-16 text-slate-950">
@@ -185,31 +266,49 @@ function ConfirmPageContent() {
           {displayedStatus}
         </p>
 
-        {canRetry && (
-          <div className="mt-6 flex flex-wrap gap-4">
-            <button
-              type="button"
-              onClick={() =>
-                setRetryTrigger((value) => value + 1)
-              }
-              className="rounded-full bg-orange-500 px-6 py-3 font-black uppercase text-white hover:bg-orange-600"
-            >
-              Retry Confirmation
-            </button>
-
-            <a
-              href="/contact"
-              className="rounded-full border-2 border-slate-950 px-6 py-3 font-black uppercase text-slate-950"
-            >
-              Contact Us
-            </a>
-          </div>
+        {bookingId && (
+          <p className="mt-6 text-sm font-bold text-slate-500">
+            Booking ID:{" "}
+            {bookingId}
+          </p>
         )}
 
         {bookingId && (
-          <p className="mt-6 text-sm font-bold text-slate-500">
-            Booking ID: {bookingId}
-          </p>
+          <div className="mt-8 flex flex-wrap gap-4">
+            {location === "king-of-prussia" && (
+              <Link
+                href="/locations/king-of-prussia"
+                className="rounded bg-orange-500 px-6 py-3 font-black uppercase text-white hover:bg-orange-600"
+              >
+                Back to King of Prussia
+              </Link>
+            )}
+
+            {location === "cherry-hill" && (
+              <Link
+                href="/locations/cherry-hill"
+                className="rounded bg-orange-500 px-6 py-3 font-black uppercase text-white hover:bg-orange-600"
+              >
+                Back to Cherry Hill
+              </Link>
+            )}
+
+            <Link
+              href="/"
+              className="rounded border-2 border-slate-950 px-6 py-3 font-black uppercase text-slate-950"
+            >
+              Home
+            </Link>
+          </div>
+        )}
+
+        {needsRecovery && (
+          <a
+            href="/contact"
+            className="mt-8 inline-block rounded-full border-2 border-slate-950 px-6 py-3 font-black uppercase text-slate-950"
+          >
+            Contact Us
+          </a>
         )}
       </section>
     </main>
@@ -218,7 +317,13 @@ function ConfirmPageContent() {
 
 export default function ConfirmPage() {
   return (
-    <Suspense fallback={<div>Finalizing your booking...</div>}>
+    <Suspense
+      fallback={
+        <div>
+          Confirming your booking...
+        </div>
+      }
+    >
       <ConfirmPageContent />
     </Suspense>
   );
