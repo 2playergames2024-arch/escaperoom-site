@@ -18,6 +18,14 @@ import {
   trackClarityEvent,
 } from "../lib/clarity";
 
+type ResumeBooking = {
+  sessionId: string;
+  location: string;
+  roomName: string;
+  date: string;
+  time: string;
+};
+
 type Slot = {
   eventId: string;
   productId: string;
@@ -126,6 +134,9 @@ export default function LocationBookingPage({
     isAvailabilityFetching,
     setIsAvailabilityFetching,
   ] = useState(false);
+
+  const [resumeBooking, setResumeBooking] =
+    useState<ResumeBooking | null>(null);
 
   /*
    * Restore optional room/date from URL.
@@ -339,11 +350,50 @@ export default function LocationBookingPage({
     );
   }
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadResumeBooking() {
+      try {
+        const response =
+          await fetch(
+            "/api/booking-resume",
+            {
+              cache: "no-store",
+            }
+          );
+
+        const data =
+          await response.json();
+
+        if (
+          !cancelled &&
+          response.ok &&
+          data.active &&
+          data.booking?.location ===
+          locationSlug
+        ) {
+          setResumeBooking(
+            data.booking
+          );
+        }
+      } catch {
+        // Resume lookup is optional.
+        // Normal booking flow should still work.
+      }
+    }
+
+    loadResumeBooking();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [locationSlug]);
 
   /*
-   * Load all room availability with one
-   * Bookeo request for the selected date.
-   */
+ * Load all room availability with one
+ * Bookeo request for the selected date.
+ */
   useEffect(() => {
     const requestId =
       latestRequestRef.current +
@@ -577,10 +627,44 @@ export default function LocationBookingPage({
               locationData.shortName
             }
           </h1>
-          
+
         </section>
 
         <section className="mx-auto max-w-7xl px-6 py-3">
+          {resumeBooking && (
+            <div className="mx-auto mb-6 max-w-xl rounded-2xl border-[6px] border-orange-500 bg-orange-50 p-6 text-center">
+              <p className="text-2xl font-black uppercase tracking-wide text-orange-600">
+                Booking in Progress
+              </p>
+
+              <p className="mt-2 font-bold text-slate-700">
+                {resumeBooking.roomName}
+                {" — "}
+                {new Date(
+                  `${resumeBooking.date}T12:00:00`
+                ).toLocaleDateString("en-US", {
+                  weekday: "long",
+                  month: "long",
+                  day: "numeric",
+                })}
+                {" at "}
+                {resumeBooking.time}
+              </p>
+
+              <Link
+                href={`/book/payment?sessionId=${encodeURIComponent(
+                  resumeBooking.sessionId
+                )}`}
+                className="mt-3 inline-block rounded bg-orange-500 px-6 py-3 font-black uppercase text-white hover:bg-orange-600"
+              >
+                Continue Booking
+              </Link>
+
+              <p className="mt-2 text-sm font-bold text-slate-600">
+                Or select a new room and time below.
+              </p>
+            </div>
+          )}
           <div className="sticky top-[76px] z-30 mx-auto mb-8 grid w-full max-w-xl grid-cols-[52px_minmax(0,1fr)_52px] items-center bg-white py-2 text-center shadow-sm">
             <button
               type="button"

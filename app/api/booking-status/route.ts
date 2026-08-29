@@ -107,18 +107,35 @@ export async function POST(
                     }
                     : null;
 
-            return NextResponse.json({
-                status:
-                    "confirmed",
+            const response =
+                NextResponse.json({
+                    status:
+                        "confirmed",
 
-                bookingId:
-                    finalizedBooking.bookingId,
+                    bookingId:
+                        finalizedBooking.bookingId,
 
-                location:
-                    session?.location || "",
+                    location:
+                        session?.location || "",
 
-                purchase,
-            });
+                    purchase,
+                });
+
+            response.cookies.set(
+                "erm_booking_resume",
+                "",
+                {
+                    httpOnly: true,
+                    secure:
+                        process.env.NODE_ENV ===
+                        "production",
+                    sameSite: "lax",
+                    path: "/",
+                    maxAge: 0,
+                }
+            );
+
+            return response;
         }
 
         const orphan =

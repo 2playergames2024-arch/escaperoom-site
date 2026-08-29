@@ -13,6 +13,7 @@ export type TrustedBookeoHold = {
   promotionDiscount: string;
   tax: string;
   total: string;
+  holdExpiration: string;
   createdAt: number;
 };
 
@@ -32,6 +33,7 @@ export type BookingSession = {
   promotionDiscount: string;
   tax: string;
   total: string;
+  holdExpiration: string;
   firstName: string;
   lastName: string;
   email: string;

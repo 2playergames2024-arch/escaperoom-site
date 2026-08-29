@@ -262,12 +262,12 @@ export async function POST(
     const trustedSlot =
       Array.isArray(trustedSlots)
         ? trustedSlots.find(
-            (slot) =>
-              slot.eventId ===
-                eventId &&
-              slot.productId ===
-                room.productId
-          )
+          (slot) =>
+            slot.eventId ===
+            eventId &&
+            slot.productId ===
+            room.productId
+        )
         : undefined;
 
     if (!trustedSlot) {
@@ -282,9 +282,9 @@ export async function POST(
 
     const {
       date:
-        trustedDate,
+      trustedDate,
       time:
-        trustedTime,
+      trustedTime,
     } =
       getEasternBookingDateTime(
         trustedSlot.startTime
@@ -300,9 +300,9 @@ export async function POST(
         players
       ) ||
       players <
-        minimumPlayers ||
+      minimumPlayers ||
       players >
-        room.maxPlayers
+      room.maxPlayers
     ) {
       return NextResponse.json(
         {
@@ -315,7 +315,7 @@ export async function POST(
 
     const BOOKEO_API_KEY =
       locationConfig.slug ===
-      LOCATIONS.cherryHill.slug
+        LOCATIONS.cherryHill.slug
         ? BOOKEO_CH_API_KEY
         : BOOKEO_KOP_API_KEY;
 
@@ -387,16 +387,16 @@ export async function POST(
         serialized.includes(
           "voucher"
         ) ||
-        serialized.includes(
-          "promotion"
-        ) ||
-        serialized.includes(
-          "coupon"
-        )
+          serialized.includes(
+            "promotion"
+          ) ||
+          serialized.includes(
+            "coupon"
+          )
           ? "Gift voucher or promo code not found."
           : data.message ||
-            data.error ||
-            "Could not create booking hold.";
+          data.error ||
+          "Could not create booking hold.";
 
       console.error(
         "Bookeo hold request rejected.",
@@ -421,6 +421,11 @@ export async function POST(
     const holdId =
       String(
         data.id || ""
+      );
+
+    const holdExpiration =
+      String(
+        data.expiration || ""
       );
 
     const roomCharge =
@@ -450,6 +455,7 @@ export async function POST(
 
     if (
       !holdId ||
+      !holdExpiration ||
       !Number.isFinite(
         roomCharge
       ) ||
@@ -458,7 +464,7 @@ export async function POST(
         promotionDiscount
       ) ||
       promotionDiscount <
-        0 ||
+      0 ||
       !Number.isFinite(
         tax
       ) ||
@@ -534,6 +540,8 @@ export async function POST(
             2
           ),
 
+        holdExpiration,
+
         createdAt:
           Date.now(),
       },
@@ -558,9 +566,9 @@ export async function POST(
       error instanceof Error &&
       (
         error.name ===
-          "TimeoutError" ||
+        "TimeoutError" ||
         error.name ===
-          "AbortError"
+        "AbortError"
       );
 
     console.error(

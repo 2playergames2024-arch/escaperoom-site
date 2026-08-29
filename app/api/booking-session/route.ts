@@ -191,10 +191,27 @@ export async function POST(req: Request) {
         );
 
       if (existingSession) {
-        return NextResponse.json({
-          sessionId:
-            existingSessionId,
-        });
+        const response =
+          NextResponse.json({
+            sessionId:
+              existingSessionId,
+          });
+
+        response.cookies.set(
+          "erm_booking_resume",
+          existingSessionId,
+          {
+            httpOnly: true,
+            secure:
+              process.env.NODE_ENV ===
+              "production",
+            sameSite: "lax",
+            path: "/",
+            maxAge: 60 * 60,
+          }
+        );
+
+        return response;
       }
 
       await redis.del(
@@ -249,6 +266,9 @@ export async function POST(req: Request) {
 
       total:
         trustedHold.total,
+
+      holdExpiration:
+        trustedHold.holdExpiration,
 
       firstName,
       lastName,
@@ -309,10 +329,27 @@ export async function POST(req: Request) {
           );
 
         if (claimedSession) {
-          return NextResponse.json({
-            sessionId:
-              claimedSessionId,
-          });
+          const response =
+            NextResponse.json({
+              sessionId:
+                claimedSessionId,
+            });
+
+          response.cookies.set(
+            "erm_booking_resume",
+            claimedSessionId,
+            {
+              httpOnly: true,
+              secure:
+                process.env.NODE_ENV ===
+                "production",
+              sameSite: "lax",
+              path: "/",
+              maxAge: 60 * 60,
+            }
+          );
+
+          return response;
         }
 
         /*
@@ -340,9 +377,26 @@ export async function POST(req: Request) {
       );
     }
 
-    return NextResponse.json({
+    const response =
+      NextResponse.json({
+        sessionId,
+      });
+
+    response.cookies.set(
+      "erm_booking_resume",
       sessionId,
-    });
+      {
+        httpOnly: true,
+        secure:
+          process.env.NODE_ENV ===
+          "production",
+        sameSite: "lax",
+        path: "/",
+        maxAge: 60 * 60,
+      }
+    );
+
+    return response;
   } catch (error) {
     console.error(
       "Booking session creation failed.",
@@ -380,11 +434,11 @@ export async function GET(req: Request) {
       `rate-limit:booking-session-get:${ip}`;
 
     const attempts =
-    await incrementRateLimit(
-      redis,
-      rateLimitKey,
-      600
-    );
+      await incrementRateLimit(
+        redis,
+        rateLimitKey,
+        600
+      );
 
     if (attempts > 60) {
       return NextResponse.json(
