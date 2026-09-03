@@ -903,6 +903,16 @@ export async function finalizeBookeoBookingForSession(
 
           bookeoStatus:
             response.status,
+
+          bookeoMessage:
+            typeof data?.message === "string"
+              ? data.message
+              : null,
+
+          bookeoErrorId:
+            data?.errorId != null
+              ? String(data.errorId)
+              : null,
         }
       );
 
