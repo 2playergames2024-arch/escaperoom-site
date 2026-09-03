@@ -199,6 +199,37 @@ export async function POST(req: Request) {
      */
     const body = JSON.parse(rawBody);
 
+    const webhookReceivedAt =
+      Date.now();
+
+    console.info(
+      "BOOKING_TIMELINE",
+      {
+        stage:
+          "authorize_webhook_received",
+
+        occurredAt:
+          new Date(
+            webhookReceivedAt
+          ).toISOString(),
+
+        eventType:
+          String(
+            body?.eventType || ""
+          ),
+
+        transactionId:
+          String(
+            body?.payload?.id || ""
+          ),
+
+        sessionId:
+          String(
+            body?.payload?.merchantReferenceId || ""
+          ),
+      }
+    );
+
     const eventType = String(
       body?.eventType || ""
     );

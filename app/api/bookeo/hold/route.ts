@@ -428,6 +428,46 @@ export async function POST(
         data.expiration || ""
       );
 
+    const holdCreatedAt =
+      Date.now();
+
+    console.info(
+      "BOOKING_TIMELINE",
+      {
+        stage:
+          "bookeo_hold_created",
+
+        holdId,
+
+        location:
+          locationConfig.slug,
+
+        productId:
+          room.productId,
+
+        eventId,
+
+        occurredAt:
+          new Date(
+            holdCreatedAt
+          ).toISOString(),
+
+        holdExpiration,
+
+        holdDurationMs:
+          Number.isFinite(
+            new Date(
+              holdExpiration
+            ).getTime()
+          )
+            ? new Date(
+              holdExpiration
+            ).getTime() -
+            holdCreatedAt
+            : null,
+      }
+    );
+
     const roomCharge =
       Number(
         data.price

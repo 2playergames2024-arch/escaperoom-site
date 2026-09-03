@@ -300,6 +300,27 @@ export async function verifyAuthorizePaymentForSession(
     };
   }
 
+  const authorizeVerifyStartedAt =
+    Date.now();
+
+  console.info(
+    "BOOKING_TIMELINE",
+    {
+      stage:
+        "authorize_verify_started",
+
+      sessionId,
+
+      transactionId:
+        authorizeEvent.transactionId,
+
+      occurredAt:
+        new Date(
+          authorizeVerifyStartedAt
+        ).toISOString(),
+    }
+  );
+
   const apiUrl =
     environment === "sandbox"
       ? "https://apitest.authorize.net/xml/v1/request.api"
@@ -343,6 +364,45 @@ export async function verifyAuthorizePaymentForSession(
 
     const data =
       await response.json();
+
+    const authorizeVerifyCompletedAt =
+      Date.now();
+
+    console.info(
+      "BOOKING_TIMELINE",
+      {
+        stage:
+          "authorize_verify_response",
+
+        sessionId,
+
+        transactionId:
+          authorizeEvent.transactionId,
+
+        occurredAt:
+          new Date(
+            authorizeVerifyCompletedAt
+          ).toISOString(),
+
+        durationMs:
+          authorizeVerifyCompletedAt -
+          authorizeVerifyStartedAt,
+
+        authorizeHttpStatus:
+          response.status,
+
+        authorizeResultCode:
+          String(
+            data?.messages?.resultCode || ""
+          ),
+
+        transactionStatus:
+          String(
+            data?.transaction
+              ?.transactionStatus || ""
+          ),
+      }
+    );
 
     if (
       !response.ok ||
@@ -710,6 +770,54 @@ export async function finalizeBookeoBookingForSession(
       };
     }
 
+    const bookeoFinalizeStartedAt =
+      Date.now();
+
+    const holdExpirationMs =
+      new Date(
+        session.holdExpiration
+      ).getTime();
+
+    console.info(
+      "BOOKING_TIMELINE",
+      {
+        stage:
+          "bookeo_finalize_started",
+
+        sessionId,
+
+        transactionId:
+          verifiedPayment.transactionId,
+
+        holdId:
+          session.holdId,
+
+        holdExpiration:
+          session.holdExpiration,
+
+        occurredAt:
+          new Date(
+            bookeoFinalizeStartedAt
+          ).toISOString(),
+
+        millisecondsUntilHoldExpiration:
+          Number.isFinite(
+            holdExpirationMs
+          )
+            ? holdExpirationMs -
+            bookeoFinalizeStartedAt
+            : null,
+
+        holdAlreadyExpired:
+          Number.isFinite(
+            holdExpirationMs
+          )
+            ? bookeoFinalizeStartedAt >=
+            holdExpirationMs
+            : null,
+      }
+    );
+
     const url =
       `https://api.bookeo.com/v2/bookings` +
       `?previousHoldId=${encodeURIComponent(
@@ -818,6 +926,44 @@ export async function finalizeBookeoBookingForSession(
 
     const data =
       await response.json();
+
+    const bookeoResponseAt =
+      Date.now();
+
+    console.info(
+      "BOOKING_TIMELINE",
+      {
+        stage:
+          "bookeo_finalize_response",
+
+        sessionId,
+
+        transactionId:
+          verifiedPayment.transactionId,
+
+        occurredAt:
+          new Date(
+            bookeoResponseAt
+          ).toISOString(),
+
+        durationMs:
+          bookeoResponseAt -
+          bookeoFinalizeStartedAt,
+
+        bookeoStatus:
+          response.status,
+
+        bookeoMessage:
+          typeof data?.message === "string"
+            ? data.message
+            : null,
+
+        bookeoErrorId:
+          data?.errorId != null
+            ? String(data.errorId)
+            : null,
+      }
+    );
 
     /*
      * Bookeo explicitly rejected the booking.
