@@ -275,18 +275,168 @@ export async function verifyAuthorizePaymentForSession(
     };
   }
 
-  const authorizeEvent =
+  const apiUrl =
+    environment === "sandbox"
+      ? "https://apitest.authorize.net/xml/v1/request.api"
+      : "https://api.authorize.net/xml/v1/request.api";
+
+  let authorizeEvent =
     await redis.get<AuthorizeEvent>(
       `authorize-event:${sessionId}`
     );
 
+  /*
+   * FALLBACK:
+   * If the webhook never arrived, look for the
+   * transaction directly in Authorize.Net using
+   * the invoice number we saved with the payment attempt.
+   */
   if (!authorizeEvent?.transactionId) {
-    return {
-      ok: false,
-      pending: true,
-      error:
-        "Payment notification has not arrived yet.",
-    };
+    const paymentAttempt =
+      await redis.get<PaymentAttempt>(
+        `payment-attempt:${sessionId}`
+      );
+
+    const invoiceNumber =
+      paymentAttempt?.invoiceNumber;
+
+    if (!invoiceNumber) {
+      return {
+        ok: false,
+        pending: true,
+        error:
+          "Payment notification has not arrived yet.",
+      };
+    }
+
+    try {
+      const discoveryResponse =
+        await fetch(
+          apiUrl,
+          {
+            method: "POST",
+
+            signal:
+              AbortSignal.timeout(
+                AUTHORIZE_VERIFY_TIMEOUT_MS
+              ),
+
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+
+            cache: "no-store",
+
+            body:
+              JSON.stringify({
+                getUnsettledTransactionListRequest: {
+                  merchantAuthentication: {
+                    name: loginId,
+                    transactionKey,
+                  },
+
+                  sorting: {
+                    orderBy:
+                      "submitTimeUTC",
+                    orderDescending:
+                      true,
+                  },
+
+                  paging: {
+                    limit: 100,
+                    offset: 1,
+                  },
+                },
+              }),
+          }
+        );
+
+      const discoveryData =
+        await discoveryResponse.json();
+
+      if (
+        discoveryResponse.ok &&
+        discoveryData?.messages
+          ?.resultCode === "Ok" &&
+        Array.isArray(
+          discoveryData.transactions
+        )
+      ) {
+        const matchingTransaction =
+          discoveryData.transactions.find(
+            (transaction: {
+              invoiceNumber?: string;
+              transId?: string;
+            }) =>
+              String(
+                transaction.invoiceNumber ||
+                ""
+              ) === invoiceNumber &&
+              Boolean(
+                transaction.transId
+              )
+          );
+
+        if (
+          matchingTransaction?.transId
+        ) {
+          authorizeEvent = {
+            eventType:
+              "recovered_without_webhook",
+
+            transactionId:
+              String(
+                matchingTransaction.transId
+              ),
+
+            sessionId,
+
+            receivedAt:
+              Date.now(),
+          };
+
+          await redis.set(
+            `authorize-event:${sessionId}`,
+            authorizeEvent,
+            {
+              ex:
+                PAYMENT_STATE_TTL_SECONDS,
+            }
+          );
+
+          console.warn(
+            "Authorize.Net payment discovered without webhook.",
+            {
+              sessionId,
+              invoiceNumber,
+              transactionId:
+                authorizeEvent.transactionId,
+            }
+          );
+        }
+      }
+    } catch (error) {
+      console.error(
+        "Authorize.Net missing-webhook lookup failed.",
+        {
+          sessionId,
+          reason:
+            error instanceof Error
+              ? error.name
+              : "unknown",
+        }
+      );
+    }
+
+    if (!authorizeEvent?.transactionId) {
+      return {
+        ok: false,
+        pending: true,
+        error:
+          "Payment has not been located yet.",
+      };
+    }
   }
 
   if (
@@ -320,11 +470,6 @@ export async function verifyAuthorizePaymentForSession(
         ).toISOString(),
     }
   );
-
-  const apiUrl =
-    environment === "sandbox"
-      ? "https://apitest.authorize.net/xml/v1/request.api"
-      : "https://api.authorize.net/xml/v1/request.api";
 
   const payload = {
     getTransactionDetailsRequest: {

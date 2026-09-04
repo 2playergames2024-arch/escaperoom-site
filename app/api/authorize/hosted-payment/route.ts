@@ -430,6 +430,12 @@ export async function POST(req: Request) {
     const now =
       Date.now();
 
+    const invoiceNumber =
+      "ERM-" +
+      now
+        .toString()
+        .slice(-10);
+
     const paymentAttempt:
       PaymentAttempt = {
       sessionId,
@@ -438,6 +444,7 @@ export async function POST(req: Request) {
       session,
       status:
         "creating",
+      invoiceNumber,
       createdAt:
         now,
       updatedAt:
@@ -520,11 +527,7 @@ export async function POST(req: Request) {
             amount.toFixed(2),
 
           order: {
-            invoiceNumber:
-              "ERM-" +
-              Date.now()
-                .toString()
-                .slice(-10),
+            invoiceNumber,
 
             description:
               session.roomName ||

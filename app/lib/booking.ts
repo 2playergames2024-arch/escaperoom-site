@@ -62,12 +62,13 @@ export type PaymentAttempt = {
   claimId: string;
   session: BookingSession;
   status:
-    | "creating"
-    | "ready"
-    | "paid";
+  | "creating"
+  | "ready"
+  | "paid";
   token?: string;
   paymentUrl?: string;
   tokenIssuedAt?: number;
+  invoiceNumber?: string;
   transactionId?: string;
   paidAt?: number;
   createdAt: number;
@@ -122,13 +123,13 @@ export type OrphanPayment = {
   bookeoError: unknown;
   createdAt: number;
   status:
-    | "needs_recovery"
-    | "reconciled"
-    | "recovered";
+  | "needs_recovery"
+  | "reconciled"
+  | "recovered";
   failureType:
-    | "bookeo_rejected"
-    | "uncertain"
-    | "payment_received_pending_finalization";
+  | "bookeo_rejected"
+  | "uncertain"
+  | "payment_received_pending_finalization";
 };
 
 export function isValidCalendarDate(
@@ -271,7 +272,7 @@ function resolveEasternOffsetForLocalTime(
       new Date(
         localWallClockUtc -
         totalOffsetMinutes *
-          60_000
+        60_000
       );
   }
 
