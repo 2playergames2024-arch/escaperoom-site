@@ -18,6 +18,9 @@ const redis = Redis.fromEnv();
 const RECOVERY_DELAY_MS =
   60 * 1000;
 
+const MAX_AUTO_RECOVERY_AGE_MS =
+  6 * 60 * 60 * 1000;
+
 export async function GET(
   req: NextRequest
 ) {
@@ -32,7 +35,7 @@ export async function GET(
   if (
     !cronSecret ||
     authHeader !==
-      `Bearer ${cronSecret}`
+    `Bearer ${cronSecret}`
   ) {
     return NextResponse.json(
       {
@@ -76,17 +79,22 @@ export async function GET(
       if (
         !paymentAttempt ||
         paymentAttempt.status !==
-          "ready"
+        "ready"
       ) {
         continue;
       }
 
       checked++;
 
-      if (
+      const paymentAgeMs =
         Date.now() -
-          paymentAttempt.updatedAt <
-        RECOVERY_DELAY_MS
+        paymentAttempt.updatedAt;
+
+      if (
+        paymentAgeMs <
+        RECOVERY_DELAY_MS ||
+        paymentAgeMs >
+        MAX_AUTO_RECOVERY_AGE_MS
       ) {
         continue;
       }
