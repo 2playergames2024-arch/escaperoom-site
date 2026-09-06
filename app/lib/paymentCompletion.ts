@@ -690,7 +690,12 @@ export async function verifyAuthorizePaymentForSession(
 }
 
 export async function finalizeBookeoBookingForSession(
-  sessionId: string
+  sessionId: string,
+  trustedPayment?: {
+    sessionId: string;
+    transactionId: string;
+    amount: string;
+  }
 ): Promise<FinalizeBookingResult> {
   let lockToken = "";
   let lockAcquired = false;
@@ -789,9 +794,17 @@ export async function finalizeBookeoBookingForSession(
     }
 
     /*
-     * HARD PAYMENT SECURITY GATE
-     */
+ * PAYMENT GATE
+ *
+ * A valid signed Authorize.Net webhook may supply the
+ * trusted transaction directly so Bookeo does not depend
+ * on the secondary getTransactionDetails request.
+ *
+ * The verified-payment record remains supported for
+ * recovery and audit paths.
+ */
     const verifiedPayment =
+      trustedPayment ??
       await redis.get<VerifiedPayment>(
         `verified-payment:${sessionId}`
       );
@@ -801,7 +814,7 @@ export async function finalizeBookeoBookingForSession(
         ok: false,
         status: 403,
         error:
-          "Payment has not been independently verified.",
+          "No trusted payment record is available for this booking.",
       };
     }
 
@@ -1442,6 +1455,58 @@ export async function finalizeBookeoBookingForSession(
 export async function completePaidBooking(
   sessionId: string
 ): Promise<CompletePaidBookingResult> {
+  const authorizeEvent =
+    await redis.get<AuthorizeEvent>(
+      `authorize-event:${sessionId}`
+    );
+
+  const session =
+    await loadBookingSession(sessionId);
+
+  if (
+    authorizeEvent?.transactionId &&
+    session
+  ) {
+    const trustedPayment = {
+      sessionId,
+      transactionId:
+        authorizeEvent.transactionId,
+      amount:
+        Number(session.total).toFixed(2),
+    };
+
+    const bookeoResult =
+      await finalizeBookeoBookingForSession(
+        sessionId,
+        trustedPayment
+      );
+
+    if (bookeoResult.ok) {
+      void verifyAuthorizePaymentForSession(
+        sessionId
+      ).catch((error) => {
+        console.error(
+          "Background Authorize.Net audit failed.",
+          {
+            sessionId,
+            error:
+              error instanceof Error
+                ? error.name
+                : "unknown",
+          }
+        );
+      });
+    }
+
+    return bookeoResult;
+  }
+
+  /*
+   * Recovery path for payments where the webhook
+   * never arrived. In that case we still need to
+   * locate and verify the Authorize.Net transaction
+   * before Bookeo can be finalized.
+   */
   const verification =
     await verifyAuthorizePaymentForSession(
       sessionId
@@ -1450,15 +1515,12 @@ export async function completePaidBooking(
   if (!verification.ok) {
     return {
       ok: false,
-
       pending:
         verification.pending,
-
       status:
         verification.pending
           ? 202
           : 400,
-
       error:
         verification.error,
     };

@@ -78,8 +78,10 @@ export async function GET(
 
       if (
         !paymentAttempt ||
-        paymentAttempt.status !==
-        "ready"
+        (
+          paymentAttempt.status !== "ready" &&
+          paymentAttempt.status !== "paid"
+        )
       ) {
         continue;
       }
