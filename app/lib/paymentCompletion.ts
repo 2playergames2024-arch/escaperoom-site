@@ -1482,9 +1482,11 @@ export async function completePaidBooking(
       );
 
     if (bookeoResult.ok) {
-      void verifyAuthorizePaymentForSession(
-        sessionId
-      ).catch((error) => {
+      try {
+        await verifyAuthorizePaymentForSession(
+          sessionId
+        );
+      } catch (error) {
         console.error(
           "Background Authorize.Net audit failed.",
           {
@@ -1495,7 +1497,7 @@ export async function completePaidBooking(
                 : "unknown",
           }
         );
-      });
+      }
     }
 
     return bookeoResult;
