@@ -68,11 +68,11 @@ export async function GET(
       `rate-limit:bookeo-availability:${ip}`;
 
     const attempts =
-    await incrementRateLimit(
-      redis,
-      rateLimitKey,
-      600
-    );
+      await incrementRateLimit(
+        redis,
+        rateLimitKey,
+        600
+      );
 
     if (attempts > 100) {
       return NextResponse.json(
@@ -149,7 +149,7 @@ export async function GET(
 
     const BOOKEO_API_KEY =
       locationConfig.slug ===
-      LOCATIONS.cherryHill.slug
+        LOCATIONS.cherryHill.slug
         ? BOOKEO_CH_API_KEY
         : BOOKEO_KOP_API_KEY;
 
@@ -239,9 +239,9 @@ export async function GET(
           headers:
             retryAfter
               ? {
-                  "Retry-After":
-                    retryAfter,
-                }
+                "Retry-After":
+                  retryAfter,
+              }
               : undefined,
         }
       );
@@ -279,11 +279,11 @@ export async function GET(
         data?.data
       )
         ? data.data.filter(
-            (slot) =>
-              trustedProductIds.has(
-                slot.productId
-              )
-          )
+          (slot) =>
+            trustedProductIds.has(
+              slot.productId
+            )
+        )
         : [];
 
     /*
@@ -336,9 +336,9 @@ export async function GET(
       error instanceof Error &&
       (
         error.name ===
-          "TimeoutError" ||
+        "TimeoutError" ||
         error.name ===
-          "AbortError"
+        "AbortError"
       );
 
     console.error(
@@ -348,6 +348,18 @@ export async function GET(
           isTimeout
             ? "timeout"
             : "request_error",
+        errorName:
+          error instanceof Error
+            ? error.name
+            : "unknown",
+        errorMessage:
+          error instanceof Error
+            ? error.message
+            : String(error),
+        errorCause:
+          error instanceof Error
+            ? error.cause
+            : undefined,
       }
     );
 
