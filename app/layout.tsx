@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import ClarityAnalytics from "./components/ClarityAnalytics";
 import GoogleAnalytics from "./components/GoogleAnalytics";
 import "./globals.css";
+import MarketingTracking from "./components/MarketingTracking";
 
 export const metadata: Metadata = {
   metadataBase: new URL(
@@ -56,7 +57,20 @@ export default function RootLayout({
             "#f8f8f8",
         }}
       >
+        <noscript>
+          <iframe
+            src="https://www.googletagmanager.com/ns.html?id=GTM-T2DDG4HK"
+            height="0"
+            width="0"
+            style={{
+              display: "none",
+              visibility: "hidden",
+            }}
+          />
+        </noscript>
+
         <ClarityAnalytics />
+        <MarketingTracking />
         <GoogleAnalytics />
         {children}
       </body>
