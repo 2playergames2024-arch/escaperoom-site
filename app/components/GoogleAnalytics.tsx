@@ -12,8 +12,6 @@ function isSensitivePath(
   pathname: string
 ) {
   return (
-    pathname === "/book" ||
-    pathname.startsWith("/book/") ||
     pathname === "/admin" ||
     pathname.startsWith("/admin/")
   );
