@@ -57,17 +57,42 @@ export default function RootLayout({
             "#f8f8f8",
         }}
       >
-        <noscript>
-          <iframe
-            src="https://www.googletagmanager.com/ns.html?id=GTM-T2DDG4HK"
-            height="0"
-            width="0"
-            style={{
-              display: "none",
-              visibility: "hidden",
-            }}
-          />
-        </noscript>
+        <body
+          style={{
+            margin: 0,
+            fontFamily:
+              "Arial, sans-serif",
+            backgroundColor:
+              "#f8f8f8",
+          }}
+        >
+          <noscript>
+            <iframe
+              src="https://www.googletagmanager.com/ns.html?id=GTM-T2DDG4HK"
+              height="0"
+              width="0"
+              style={{
+                display: "none",
+                visibility: "hidden",
+              }}
+            />
+          </noscript>
+
+          <noscript>
+            <img
+              height="1"
+              width="1"
+              style={{ display: "none" }}
+              src="https://www.facebook.com/tr?id=503092840234651&ev=PageView&noscript=1"
+              alt=""
+            />
+          </noscript>
+
+          <ClarityAnalytics />
+          <MarketingTracking />
+          <GoogleAnalytics />
+          {children}
+        </body>
 
         <ClarityAnalytics />
         <MarketingTracking />
