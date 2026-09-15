@@ -1,5 +1,6 @@
 import "server-only";
 import { neon } from "@neondatabase/serverless";
+import { BOOKING_STATES } from "./bookingState";
 
 function getSql() {
   const databaseUrl = process.env.DATABASE_URL;
@@ -132,6 +133,24 @@ export async function updateBookingLedgerRecord({
         ),
       updated_at = NOW()
     WHERE checkout_id = ${checkoutId}
+    RETURNING *
+  `;
+
+  return rows[0] ?? null;
+}
+export async function claimCheckoutForAuthorization(
+  checkoutId: string
+) {
+  const sql = getSql();
+
+  const rows = await sql`
+    UPDATE booking_ledger
+    SET
+      status = ${BOOKING_STATES.AUTHORIZING},
+      updated_at = NOW()
+    WHERE
+      checkout_id = ${checkoutId}
+      AND status = ${BOOKING_STATES.HOLD_CREATED}
     RETURNING *
   `;
 
