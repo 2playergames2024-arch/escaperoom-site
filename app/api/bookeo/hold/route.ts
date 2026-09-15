@@ -1,4 +1,11 @@
 import { NextResponse } from "next/server";
+import { randomUUID } from "crypto";
+import {
+  createBookingLedgerRecord,
+} from "@/app/lib/bookingLedger";
+import {
+  BOOKING_STATES,
+} from "@/app/lib/bookingState";
 import { Redis } from "@upstash/redis";
 import { incrementRateLimit } from "@/app/lib/rateLimit";
 import {
@@ -590,11 +597,22 @@ export async function POST(
       }
     );
 
+    const checkoutId =
+      `ERM-${randomUUID()}`;
+
+    await createBookingLedgerRecord({
+      checkoutId,
+      holdId,
+      status:
+        BOOKING_STATES.HOLD_CREATED,
+    });
+
     return NextResponse.json(
       {
         status:
           response.status,
         data,
+        checkoutId,
       },
       {
         status:
