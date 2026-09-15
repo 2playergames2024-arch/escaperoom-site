@@ -228,6 +228,12 @@ export async function POST(req: Request) {
       holdId:
         trustedHold.holdId,
 
+      checkoutId:
+        trustedHold.checkoutId,
+
+      promoCode:
+        trustedHold.promoCode,
+
       productId:
         trustedHold.productId,
 

@@ -1,5 +1,7 @@
 export type TrustedBookeoHold = {
   holdId: string;
+  checkoutId: string;
+  promoCode: string;
   productId: string;
   eventId: string;
   players: string;
@@ -20,6 +22,8 @@ export type TrustedBookeoHold = {
 export type BookingSession = {
   sessionId: string;
   holdId: string;
+  checkoutId: string;
+  promoCode: string;
   productId: string;
   eventId: string;
   players: string;

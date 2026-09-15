@@ -178,6 +178,11 @@ export async function POST(
     const body =
       await request.json();
 
+    const promoCode =
+      String(
+        body.promoCode || ""
+      ).trim();
+
     const location =
       String(
         body.location || ""
@@ -375,7 +380,7 @@ export async function POST(
               },
 
               promotionCodeInput:
-                body.promoCode ||
+                promoCode ||
                 undefined,
             }),
         }
@@ -539,10 +544,15 @@ export async function POST(
       );
     }
 
+    const checkoutId =
+      `ERM-${randomUUID()}`;
+
     await redis.set(
       `bookeo-hold:${holdId}`,
       {
         holdId,
+        checkoutId,
+        promoCode,
 
         location:
           locationConfig.slug,
@@ -596,9 +606,6 @@ export async function POST(
         ex: 60 * 60,
       }
     );
-
-    const checkoutId =
-      `ERM-${randomUUID()}`;
 
     await createBookingLedgerRecord({
       checkoutId,

@@ -2,6 +2,9 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
 import { incrementRateLimit } from "@/app/lib/rateLimit";
+import {
+  ensurePreAuthHold,
+} from "@/app/lib/preAuthHold";
 import { LOCATIONS } from "../../../data/locations";
 import {
   type BookingSession,
@@ -153,7 +156,7 @@ export async function POST(req: Request) {
      * The browser supplies only sessionId.
      * Everything else comes from trusted Redis data.
      */
-    const session =
+    let session =
       await redis.get<BookingSession>(
         `booking-session:${sessionId}`
       );
@@ -180,6 +183,40 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+
+    const preAuthHoldResult =
+      await ensurePreAuthHold(
+        session
+      );
+
+    if (!preAuthHoldResult.ok) {
+      if (
+        preAuthHoldResult.reason ===
+        "UNAVAILABLE"
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Sorry, those seats are no longer available.",
+            unavailable: true,
+          },
+          { status: 409 }
+        );
+      }
+
+      return NextResponse.json(
+        {
+          error:
+            "Bookeo could not verify the booking hold. Please try again.",
+          retryable:
+            preAuthHoldResult.retryable,
+        },
+        { status: 502 }
+      );
+    }
+
+    session =
+      preAuthHoldResult.session;
 
     /*
      * Verify the underlying trusted Bookeo hold.
