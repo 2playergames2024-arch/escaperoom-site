@@ -729,6 +729,10 @@ export async function POST(req: Request) {
           status:
             response.status,
           sessionId,
+          resultCode:
+            data?.messages?.resultCode,
+          messages:
+            data?.messages?.message,
         }
       );
 
