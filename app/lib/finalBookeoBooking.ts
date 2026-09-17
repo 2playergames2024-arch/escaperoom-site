@@ -1,4 +1,5 @@
 import "server-only";
+import { Redis } from "@upstash/redis";
 
 import {
   BOOKEO_PEOPLE_CATEGORY_ID,
@@ -19,6 +20,7 @@ const BOOKEO_SECRET_KEY =
   process.env.BOOKEO_SECRET_KEY;
 
 const BOOKEO_TIMEOUT_MS = 15_000;
+const redis = Redis.fromEnv();
 
 export type FinalBookeoBookingResult =
   | {
@@ -52,6 +54,34 @@ export async function createFinalBookeoBooking(
   session: BookingSession,
   authorizeTransactionId: string
 ): Promise<FinalBookeoBookingResult> {
+  if (
+    process.env.VERCEL_ENV === "preview"
+  ) {
+    const testKey =
+      `step22-test-first-create:${session.checkoutId}`;
+
+    const alreadySimulated =
+      await redis.get<boolean>(
+        testKey
+      );
+
+    if (!alreadySimulated) {
+      await redis.set(
+        testKey,
+        true,
+        {
+          ex: 60 * 30,
+        }
+      );
+
+      return {
+        ok: false,
+        reason: "UNCERTAIN",
+        message:
+          "Preview Step 22 test: simulate first Bookeo CREATE with no booking created.",
+      };
+    }
+  }
   const BOOKEO_API_KEY =
     getBookeoApiKey(
       session.location
