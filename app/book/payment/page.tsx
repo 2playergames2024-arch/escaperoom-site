@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import {
   Suspense,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import {
@@ -93,6 +94,9 @@ function PaymentPageContent() {
   const [acceptReady, setAcceptReady] =
     useState(false);
 
+  const paymentAttemptRef =
+    useRef(false);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -155,6 +159,7 @@ function PaymentPageContent() {
 
   async function handlePayNow() {
     if (
+      paymentAttemptRef.current ||
       isPaying ||
       !session ||
       !sessionId
@@ -162,8 +167,12 @@ function PaymentPageContent() {
       return;
     }
 
+    paymentAttemptRef.current = true;
     setIsPaying(true);
     setError("");
+
+    let authorizationStarted =
+      false;
 
     try {
       const apiLoginID =
@@ -242,10 +251,48 @@ function PaymentPageContent() {
         "payment_tokenized"
       );
 
+      authorizationStarted = true;
+      const authorizationResponse =
+        await fetch(
+          "/api/authorize/auth-only",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify({
+              sessionId,
+              opaqueData,
+            }),
+          }
+        );
+
+      const authorizationData =
+        await authorizationResponse.json();
+
+      if (
+        !authorizationResponse.ok ||
+        !authorizationData.authorized
+      ) {
+        throw new Error(
+          authorizationData.error ||
+          "The card authorization was not approved."
+        );
+      }
+
+      trackClarityEvent(
+        "payment_authorized"
+      );
+
       setError(
-        "Sandbox card token created successfully."
+        `Sandbox authorization approved. Transaction ID: ${authorizationData.transactionId}`
       );
     } catch (err) {
+      if (!authorizationStarted) {
+        paymentAttemptRef.current = false;
+      }
+
       setError(
         err instanceof Error
           ? err.message
