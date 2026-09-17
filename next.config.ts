@@ -120,7 +120,7 @@ const securityHeaders = [
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
       "font-src 'self' data:",
-      "connect-src 'self' https://bookeo.com https://*.bookeo.com https://*.clarity.ms https://c.bing.com https://*.google-analytics.com https://*.analytics.google.com https://www.googletagmanager.com https://*.g.doubleclick.net https://*.google.com https://pagead2.googlesyndication.com https://www.facebook.com",
+      "connect-src 'self' https://bookeo.com https://*.bookeo.com https://*.clarity.ms https://c.bing.com https://*.google-analytics.com https://*.analytics.google.com https://www.googletagmanager.com https://*.g.doubleclick.net https://*.google.com https://pagead2.googlesyndication.com https://www.facebook.com https://jstest.authorize.net https://apitest.authorize.net",
       "frame-src 'self' https://bookeo.com https://*.bookeo.com https://www.googletagmanager.com",
       "form-action 'self' https://accept.authorize.net https://test.authorize.net",
       "object-src 'none'",
