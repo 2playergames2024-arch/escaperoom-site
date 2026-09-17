@@ -17,6 +17,9 @@ import {
 import {
   voidSandboxAuthorization,
 } from "@/app/lib/authorizeSandbox";
+import {
+  createFinalBookeoBooking,
+} from "@/app/lib/finalBookeoBooking";
 
 const redis = Redis.fromEnv();
 
@@ -460,12 +463,186 @@ export async function POST(
       session =
         postAuthHoldResult.session;
 
+      /*
+       * STEP 20:
+       * Create the final Bookeo booking from
+       * the current validated hold.
+       *
+       * Payment is still AUTH-ONLY here.
+       * Capture happens later.
+       */
+      const finalBookeoResult =
+        await createFinalBookeoBooking(
+          session,
+          transactionId
+        );
+
+      if (!finalBookeoResult.ok) {
+        /*
+         * A definite Bookeo rejection means
+         * no booking was created.
+         *
+         * Void the card authorization.
+         */
+        if (
+          finalBookeoResult.reason ===
+          "REJECTED"
+        ) {
+          const voidResult =
+            await voidSandboxAuthorization(
+              transactionId
+            );
+
+          if (voidResult.ok) {
+            await updateBookingLedgerRecord({
+              checkoutId:
+                session.checkoutId,
+
+              status:
+                BOOKING_STATES.VOIDED,
+
+              errorCode:
+                "BOOKEO_FINALIZE_REJECTED",
+
+              errorMessage:
+                finalBookeoResult.message,
+
+              errorData: {
+                bookeoStatus:
+                  finalBookeoResult.status,
+
+                bookeoData:
+                  finalBookeoResult.data,
+              },
+            });
+
+            return NextResponse.json(
+              {
+                authorized: false,
+                voided: true,
+
+                error:
+                  "Bookeo could not create the booking. The card authorization was voided.",
+              },
+              {
+                status: 502,
+              }
+            );
+          }
+
+          /*
+           * Bookeo definitely rejected,
+           * but the void was not confirmed.
+           *
+           * Preserve AUTHORIZED for recovery.
+           */
+          await updateBookingLedgerRecord({
+            checkoutId:
+              session.checkoutId,
+
+            errorCode:
+              "BOOKEO_REJECTED_VOID_NOT_CONFIRMED",
+
+            errorMessage:
+              voidResult.message,
+
+            errorData: {
+              authorizeTransactionId:
+                transactionId,
+
+              bookeoStatus:
+                finalBookeoResult.status,
+
+              voidUncertain:
+                voidResult.uncertain,
+            },
+          });
+
+          return NextResponse.json(
+            {
+              authorized: true,
+              recoveryRequired: true,
+
+              error:
+                "Bookeo rejected the booking, and the authorization void requires recovery.",
+            },
+            {
+              status: 502,
+            }
+          );
+        }
+
+        /*
+         * Timeout, 5xx, network failure,
+         * or success without bookingNumber.
+         *
+         * Do NOT send another Bookeo CREATE.
+         * Step 21 will perform booking lookup.
+         */
+        await updateBookingLedgerRecord({
+          checkoutId:
+            session.checkoutId,
+
+          errorCode:
+            "BOOKEO_FINALIZE_UNCERTAIN",
+
+          errorMessage:
+            finalBookeoResult.message,
+
+          errorData: {
+            authorizeTransactionId:
+              transactionId,
+
+            holdId:
+              session.holdId,
+          },
+        });
+
+        return NextResponse.json(
+          {
+            authorized: true,
+            recoveryRequired: true,
+
+            error:
+              "The card was authorized, but Bookeo did not return a confirmed booking result.",
+          },
+          {
+            status: 502,
+          }
+        );
+      }
+
+      /*
+       * Bookeo positively confirmed the
+       * booking and returned bookingNumber.
+       */
+      await updateBookingLedgerRecord({
+        checkoutId:
+          session.checkoutId,
+
+        bookeoBookingId:
+          finalBookeoResult.bookingId,
+
+        status:
+          BOOKING_STATES.BOOKED,
+      });
+
       return NextResponse.json({
         authorized: true,
+
         transactionId,
-        postAuthHoldValid: true,
+
+        postAuthHoldValid:
+          true,
+
         holdReplaced:
           postAuthHoldResult.replaced,
+
+        booked:
+          true,
+
+        bookeoBookingId:
+          finalBookeoResult.bookingId,
       });
     }
 
