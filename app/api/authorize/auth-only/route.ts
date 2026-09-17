@@ -14,6 +14,9 @@ import {
 import {
   ensurePreAuthHold,
 } from "@/app/lib/preAuthHold";
+import {
+  voidSandboxAuthorization,
+} from "@/app/lib/authorizeSandbox";
 
 const redis = Redis.fromEnv();
 
@@ -74,7 +77,7 @@ export async function POST(
     if (
       !opaqueData ||
       opaqueData.dataDescriptor !==
-        "COMMON.ACCEPT.INAPP.PAYMENT" ||
+      "COMMON.ACCEPT.INAPP.PAYMENT" ||
       !opaqueData.dataValue
     ) {
       return NextResponse.json(
@@ -327,9 +330,142 @@ export async function POST(
           BOOKING_STATES.AUTHORIZED,
       });
 
+      /*
+       * STEP 19:
+       * Authorization succeeded.
+       *
+       * Check the Bookeo hold again before
+       * attempting final Bookeo creation.
+       */
+      const postAuthHoldResult =
+        await ensurePreAuthHold(
+          session
+        );
+
+      if (!postAuthHoldResult.ok) {
+        /*
+         * Bookeo explicitly says the seats
+         * are no longer available.
+         *
+         * The authorization must be voided.
+         */
+        if (
+          postAuthHoldResult.reason ===
+          "UNAVAILABLE"
+        ) {
+          const voidResult =
+            await voidSandboxAuthorization(
+              transactionId
+            );
+
+          if (voidResult.ok) {
+            await updateBookingLedgerRecord({
+              checkoutId:
+                session.checkoutId,
+              status:
+                BOOKING_STATES.VOIDED,
+              errorCode:
+                "POST_AUTH_HOLD_UNAVAILABLE",
+              errorMessage:
+                "Bookeo seats became unavailable after authorization.",
+            });
+
+            return NextResponse.json(
+              {
+                authorized: false,
+                voided: true,
+                unavailable: true,
+                error:
+                  "Sorry, those seats are no longer available. The card authorization was voided.",
+              },
+              {
+                status: 409,
+              }
+            );
+          }
+
+          /*
+           * We know the seats are unavailable,
+           * but we could not confirm the void.
+           *
+           * Keep the ledger AUTHORIZED so
+           * recovery can deal with the real
+           * gateway state.
+           */
+          await updateBookingLedgerRecord({
+            checkoutId:
+              session.checkoutId,
+            errorCode:
+              "POST_AUTH_VOID_NOT_CONFIRMED",
+            errorMessage:
+              voidResult.message,
+            errorData: {
+              authorizeTransactionId:
+                transactionId,
+              uncertain:
+                voidResult.uncertain,
+            },
+          });
+
+          return NextResponse.json(
+            {
+              authorized: true,
+              recoveryRequired: true,
+              error:
+                "The seats are no longer available, and the payment authorization requires recovery.",
+            },
+            {
+              status: 502,
+            }
+          );
+        }
+
+        /*
+         * Bookeo did not give us a definitive
+         * availability result.
+         *
+         * Do NOT void and do NOT authorize again.
+         * Preserve AUTHORIZED for recovery.
+         */
+        await updateBookingLedgerRecord({
+          checkoutId:
+            session.checkoutId,
+          errorCode:
+            "POST_AUTH_BOOKEO_ERROR",
+          errorMessage:
+            "Bookeo could not confirm the hold after authorization.",
+          errorData: {
+            authorizeTransactionId:
+              transactionId,
+          },
+        });
+
+        return NextResponse.json(
+          {
+            authorized: true,
+            recoveryRequired: true,
+            error:
+              "The card was authorized, but the booking hold could not be confirmed.",
+          },
+          {
+            status: 502,
+          }
+        );
+      }
+
+      /*
+       * The hold is valid, or a replacement
+       * hold was successfully created.
+       */
+      session =
+        postAuthHoldResult.session;
+
       return NextResponse.json({
         authorized: true,
         transactionId,
+        postAuthHoldValid: true,
+        holdReplaced:
+          postAuthHoldResult.replaced,
       });
     }
 

@@ -286,7 +286,9 @@ function PaymentPageContent() {
       );
 
       setError(
-        `Sandbox authorization approved. Transaction ID: ${authorizationData.transactionId}`
+        authorizationData.holdReplaced
+          ? `Sandbox authorization approved. Bookeo hold was replaced and revalidated. Transaction ID: ${authorizationData.transactionId}`
+          : `Sandbox authorization approved. Bookeo hold revalidated after authorization. Transaction ID: ${authorizationData.transactionId}`
       );
     } catch (err) {
       if (!authorizationStarted) {
