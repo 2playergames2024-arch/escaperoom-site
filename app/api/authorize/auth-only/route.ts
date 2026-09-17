@@ -338,9 +338,14 @@ export async function POST(
        * attempting final Bookeo creation.
        */
       const postAuthHoldResult =
-        await ensurePreAuthHold(
-          session
-        );
+        process.env.VERCEL_ENV === "preview"
+          ? {
+            ok: false as const,
+            reason: "UNAVAILABLE" as const,
+          }
+          : await ensurePreAuthHold(
+            session
+          );
 
       if (!postAuthHoldResult.ok) {
         /*
