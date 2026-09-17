@@ -22,22 +22,22 @@ const BOOKEO_TIMEOUT_MS = 15_000;
 
 export type FinalBookeoBookingResult =
   | {
-      ok: true;
-      bookingId: string;
-    }
+    ok: true;
+    bookingId: string;
+  }
   | {
-      ok: false;
-      reason: "REJECTED";
-      status: number;
-      message: string;
-      data: unknown;
-    }
+    ok: false;
+    reason: "REJECTED";
+    status: number;
+    message: string;
+    data: unknown;
+  }
   | {
-      ok: false;
-      reason: "UNCERTAIN";
-      message: string;
-      data?: unknown;
-    };
+    ok: false;
+    reason: "UNCERTAIN";
+    message: string;
+    data?: unknown;
+  };
 
 function getBookeoApiKey(
   location: string
@@ -124,6 +124,9 @@ export async function createFinalBookeoBooking(
               eventId:
                 session.eventId,
 
+              externalRef:
+                session.checkoutId,
+
               participants: {
                 numbers: [
                   {
@@ -152,14 +155,14 @@ export async function createFinalBookeoBooking(
                 phoneNumbers:
                   session.phone
                     ? [
-                        {
-                          number:
-                            session.phone,
+                      {
+                        number:
+                          session.phone,
 
-                          type:
-                            "mobile",
-                        },
-                      ]
+                        type:
+                          "mobile",
+                      },
+                    ]
                     : [],
               },
 
@@ -198,7 +201,7 @@ export async function createFinalBookeoBooking(
           response.status,
         message:
           typeof data?.message ===
-          "string"
+            "string"
             ? data.message
             : "Bookeo rejected the booking.",
         data,
@@ -236,6 +239,18 @@ export async function createFinalBookeoBooking(
         reason: "UNCERTAIN",
         message:
           "Bookeo returned success but no booking number was present.",
+        data,
+      };
+    }
+
+    if (
+      process.env.VERCEL_ENV === "preview"
+    ) {
+      return {
+        ok: false,
+        reason: "UNCERTAIN",
+        message:
+          "Preview Step 21 test: simulate lost Bookeo success response.",
         data,
       };
     }

@@ -20,6 +20,9 @@ import {
 import {
   createFinalBookeoBooking,
 } from "@/app/lib/finalBookeoBooking";
+import {
+  lookupFinalBookeoBooking,
+} from "@/app/lib/bookeoBookingLookup";
 
 const redis = Redis.fromEnv();
 
@@ -579,15 +582,194 @@ export async function POST(
          * Do NOT send another Bookeo CREATE.
          * Step 21 will perform booking lookup.
          */
+        /*
+ * STEP 21:
+ * The CREATE result was uncertain.
+ *
+ * Verify whether Bookeo actually created
+ * the booking before allowing any
+ * additional CREATE attempt.
+ */
+        let lastLookupError =
+          "";
+
+        for (
+          let lookupAttempt = 1;
+          lookupAttempt <= 3;
+          lookupAttempt++
+        ) {
+          if (lookupAttempt > 1) {
+            await new Promise(
+              (resolve) =>
+                setTimeout(
+                  resolve,
+                  lookupAttempt === 2
+                    ? 1000
+                    : 2000
+                )
+            );
+          }
+
+          const lookupResult =
+            await lookupFinalBookeoBooking(
+              session
+            );
+
+          /*
+           * Exactly one booking carrying our
+           * unique checkout externalRef exists.
+           */
+          if (
+            lookupResult.ok &&
+            lookupResult.result ===
+            "FOUND"
+          ) {
+            await updateBookingLedgerRecord({
+              checkoutId:
+                session.checkoutId,
+
+              bookeoBookingId:
+                lookupResult.bookingId,
+
+              status:
+                BOOKING_STATES.BOOKED,
+            });
+
+            return NextResponse.json({
+              authorized: true,
+
+              transactionId,
+
+              booked: true,
+
+              recoveredByLookup:
+                true,
+
+              bookeoBookingId:
+                lookupResult.bookingId,
+            });
+          }
+
+          /*
+           * More than one booking with the same
+           * unique checkout ID should never occur.
+           *
+           * Stop automation.
+           */
+          if (
+            lookupResult.ok &&
+            lookupResult.result ===
+            "AMBIGUOUS"
+          ) {
+            await updateBookingLedgerRecord({
+              checkoutId:
+                session.checkoutId,
+
+              errorCode:
+                "BOOKEO_LOOKUP_MULTIPLE_MATCHES",
+
+              errorMessage:
+                "Multiple Bookeo bookings matched the same checkout ID.",
+
+              errorData: {
+                authorizeTransactionId:
+                  transactionId,
+
+                checkoutId:
+                  session.checkoutId,
+
+                matches:
+                  lookupResult.matches,
+              },
+            });
+
+            return NextResponse.json(
+              {
+                authorized: true,
+
+                recoveryRequired:
+                  true,
+
+                error:
+                  "Multiple Bookeo bookings matched this checkout. Automatic recovery stopped.",
+              },
+              {
+                status: 409,
+              }
+            );
+          }
+
+          /*
+           * Lookup itself failed.
+           *
+           * Do not interpret that as zero
+           * bookings and do not CREATE again.
+           */
+          if (!lookupResult.ok) {
+            lastLookupError =
+              lookupResult.message;
+
+            await updateBookingLedgerRecord({
+              checkoutId:
+                session.checkoutId,
+
+              errorCode:
+                "BOOKEO_LOOKUP_FAILED",
+
+              errorMessage:
+                lookupResult.message,
+
+              errorData: {
+                authorizeTransactionId:
+                  transactionId,
+
+                checkoutId:
+                  session.checkoutId,
+
+                lookupAttempt,
+              },
+            });
+
+            return NextResponse.json(
+              {
+                authorized: true,
+
+                recoveryRequired:
+                  true,
+
+                error:
+                  "Bookeo booking verification could not be completed.",
+              },
+              {
+                status: 502,
+              }
+            );
+          }
+
+          /*
+           * NO_MATCH:
+           * try again unless this was the
+           * third and final lookup.
+           */
+        }
+
+        /*
+         * Three successful Bookeo lookups
+         * found zero bookings.
+         *
+         * Keep AUTHORIZED.
+         * Step 22 decides whether one controlled
+         * second CREATE is permitted.
+         */
         await updateBookingLedgerRecord({
           checkoutId:
             session.checkoutId,
 
           errorCode:
-            "BOOKEO_FINALIZE_UNCERTAIN",
+            "BOOKEO_LOOKUP_NO_MATCH",
 
           errorMessage:
-            finalBookeoResult.message,
+            "Bookeo CREATE was uncertain and three verification lookups found no matching booking.",
 
           errorData: {
             authorizeTransactionId:
@@ -595,16 +777,28 @@ export async function POST(
 
             holdId:
               session.holdId,
+
+            checkoutId:
+              session.checkoutId,
+
+            lastLookupError:
+              lastLookupError ||
+              null,
           },
         });
 
         return NextResponse.json(
           {
             authorized: true,
-            recoveryRequired: true,
+
+            recoveryRequired:
+              true,
+
+            bookeoLookupNoMatch:
+              true,
 
             error:
-              "The card was authorized, but Bookeo did not return a confirmed booking result.",
+              "The card was authorized, but Bookeo did not confirm a booking after verification.",
           },
           {
             status: 502,
