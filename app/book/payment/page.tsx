@@ -90,6 +90,9 @@ function PaymentPageContent() {
   const [cardCode, setCardCode] =
     useState("");
 
+  const [acceptReady, setAcceptReady] =
+    useState(false);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -334,6 +337,15 @@ function PaymentPageContent() {
       <Script
         src="https://jstest.authorize.net/v1/Accept.js"
         strategy="afterInteractive"
+        onLoad={() => {
+          setAcceptReady(true);
+        }}
+        onError={() => {
+          setAcceptReady(false);
+          setError(
+            "Authorize.Net secure payment library failed to load."
+          );
+        }}
       />
       <main className="min-h-screen bg-white px-6 py-16 text-slate-950">
         <section className="mx-auto max-w-3xl rounded-[18px] border-2 border-slate-950 p-8 shadow-lg">
@@ -541,12 +553,14 @@ function PaymentPageContent() {
           <button
             type="button"
             onClick={handlePayNow}
-            disabled={isPaying}
+            disabled={isPaying || !acceptReady}
             className="mt-8 w-full rounded bg-orange-500 px-8 py-4 font-black uppercase text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-slate-400"
           >
             {isPaying
-              ? "Starting Payment..."
-              : "Proceed to Checkout"}
+              ? "Creating Secure Token..."
+              : !acceptReady
+                ? "Loading Secure Payment..."
+                : "Proceed to Checkout"}
           </button>
 
           <Link
