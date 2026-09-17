@@ -243,18 +243,6 @@ export async function createFinalBookeoBooking(
       };
     }
 
-    if (
-      process.env.VERCEL_ENV === "preview"
-    ) {
-      return {
-        ok: false,
-        reason: "UNCERTAIN",
-        message:
-          "Preview Step 21 test: simulate lost Bookeo success response.",
-        data,
-      };
-    }
-
     return {
       ok: true,
       bookingId:
