@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Script from "next/script";
 import { useSearchParams } from "next/navigation";
 import {
   Suspense,
@@ -17,6 +18,44 @@ import {
 import {
   trackClarityEvent,
 } from "../../lib/clarity";
+
+type AcceptOpaqueData = {
+  dataDescriptor: string;
+  dataValue: string;
+};
+
+type AcceptResponse = {
+  messages: {
+    resultCode: string;
+    message: Array<{
+      code: string;
+      text: string;
+    }>;
+  };
+  opaqueData?: AcceptOpaqueData;
+};
+
+declare global {
+  interface Window {
+    Accept?: {
+      dispatchData: (
+        secureData: {
+          authData: {
+            apiLoginID: string;
+            clientKey: string;
+          };
+          cardData: {
+            cardNumber: string;
+            month: string;
+            year: string;
+            cardCode: string;
+          };
+        },
+        callback: (response: AcceptResponse) => void
+      ) => void;
+    };
+  }
+}
 
 function PaymentPageContent() {
   const searchParams = useSearchParams();
@@ -37,6 +76,18 @@ function PaymentPageContent() {
     useState(false);
 
   const [error, setError] =
+    useState("");
+
+  const [cardNumber, setCardNumber] =
+    useState("");
+
+  const [expirationMonth, setExpirationMonth] =
+    useState("");
+
+  const [expirationYear, setExpirationYear] =
+    useState("");
+
+  const [cardCode, setCardCode] =
     useState("");
 
   useEffect(() => {
@@ -112,78 +163,92 @@ function PaymentPageContent() {
     setError("");
 
     try {
-      /*
-       * Hosted payment receives only the opaque session ID.
-       * It loads all trusted booking/customer/payment data
-       * server-side.
-       */
-      const response = await fetch(
-        "/api/authorize/hosted-payment",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
-          body: JSON.stringify({
-            sessionId,
-          }),
-        }
-      );
+      const apiLoginID =
+        process.env
+          .NEXT_PUBLIC_AUTHORIZE_SANDBOX_LOGIN_ID;
 
-      const data =
-        await response.json();
+      const clientKey =
+        process.env
+          .NEXT_PUBLIC_AUTHORIZE_SANDBOX_CLIENT_KEY;
 
-      if (
-        !response.ok ||
-        !data.token ||
-        !data.paymentUrl
-      ) {
-        if (response.status === 429) {
-          throw new Error(
-            "Our payment system is temporarily busy. Please wait a few minutes and try again."
-          );
-        }
-
+      if (!apiLoginID || !clientKey) {
         throw new Error(
-          data.error ||
-          "We couldn't open the secure payment form. Please try again. Your card has not been charged."
+          "Authorize.Net sandbox credentials are not configured."
         );
       }
 
-      /*
-       * Authorize.Net Accept Hosted requires a POST
-       * containing the server-issued form token.
-       */
-      const form =
-        document.createElement("form");
+      if (!window.Accept) {
+        throw new Error(
+          "Secure payment library is not available. Please refresh and try again."
+        );
+      }
 
-      form.method = "POST";
-      form.action = data.paymentUrl;
-      form.style.display = "none";
+      const opaqueData =
+        await new Promise<AcceptOpaqueData>(
+          (resolve, reject) => {
+            window.Accept!.dispatchData(
+              {
+                authData: {
+                  apiLoginID,
+                  clientKey,
+                },
+                cardData: {
+                  cardNumber:
+                    cardNumber.replace(/\s+/g, ""),
+                  month:
+                    expirationMonth.trim(),
+                  year:
+                    expirationYear.trim(),
+                  cardCode:
+                    cardCode.trim(),
+                },
+              },
+              (response) => {
+                if (
+                  response.messages.resultCode ===
+                  "Ok" &&
+                  response.opaqueData
+                ) {
+                  resolve(response.opaqueData);
+                  return;
+                }
 
-      const tokenInput =
-        document.createElement("input");
+                const message =
+                  response.messages.message
+                    ?.map((item) => item.text)
+                    .join(" ") ||
+                  "Authorize.Net could not tokenize the card.";
 
-      tokenInput.type = "hidden";
-      tokenInput.name = "token";
-      tokenInput.value = data.token;
+                reject(new Error(message));
+              }
+            );
+          }
+        );
 
-      form.appendChild(tokenInput);
-
-      document.body.appendChild(form);
+      console.log(
+        "Accept.js sandbox token received.",
+        {
+          dataDescriptor:
+            opaqueData.dataDescriptor,
+          hasDataValue:
+            Boolean(opaqueData.dataValue),
+        }
+      );
 
       trackClarityEvent(
-        "payment_started"
+        "payment_tokenized"
       );
-      form.submit();
+
+      setError(
+        "Sandbox card token created successfully."
+      );
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : "We couldn't start payment. Please try again."
+          : "We couldn't tokenize the card. Please try again."
       );
-
+    } finally {
       setIsPaying(false);
     }
   }
@@ -265,132 +330,234 @@ function PaymentPageContent() {
     Number(session.total);
 
   return (
-    <main className="min-h-screen bg-white px-6 py-16 text-slate-950">
-      <section className="mx-auto max-w-3xl rounded-[18px] border-2 border-slate-950 p-8 shadow-lg">
-        {/* <p className="text-sm font-black uppercase tracking-[0.2em] text-orange-500">
+    <>
+      <Script
+        src="https://jstest.authorize.net/v1/Accept.js"
+        strategy="afterInteractive"
+      />
+      <main className="min-h-screen bg-white px-6 py-16 text-slate-950">
+        <section className="mx-auto max-w-3xl rounded-[18px] border-2 border-slate-950 p-8 shadow-lg">
+          {/* <p className="text-sm font-black uppercase tracking-[0.2em] text-orange-500">
           Payment
         </p> */}
 
-        <h1 className="mt-2 text-4xl font-black">
-          Review
-        </h1>
+          <h1 className="mt-2 text-4xl font-black">
+            Review
+          </h1>
 
-        <div className="mt-8 grid gap-3 text-lg font-bold">
-          <p>
-            Room: {session.roomName}
-          </p>
+          <div className="mt-8 grid gap-3 text-lg font-bold">
+            <p>
+              Room: {session.roomName}
+            </p>
 
-          <p>
-            Date: {formattedDate}
-          </p>
+            <p>
+              Date: {formattedDate}
+            </p>
 
-          <p>
-            Time: {session.time}
-          </p>
+            <p>
+              Time: {session.time}
+            </p>
 
-          <p>
-            Players: {session.players}
-          </p>
+            <p>
+              Players: {session.players}
+            </p>
 
-          <div className="mt-4 border-t-2 border-slate-200 pt-4">
-            <div className="flex justify-between">
-              <span>
-                Room Charge
-              </span>
-
-              <span>
-                ${roomCharge.toFixed(2)}
-              </span>
-            </div>
-
-            <div className="mt-2 flex justify-between">
-              <span>
-                {taxLabel}
-              </span>
-
-              <span>
-                ${tax.toFixed(2)}
-              </span>
-            </div>
-
-            {promotionDiscount > 0 && (
-              <div className="mt-2 flex justify-between">
+            <div className="mt-4 border-t-2 border-slate-200 pt-4">
+              <div className="flex justify-between">
                 <span>
-                  Promotion/Voucher
+                  Room Charge
                 </span>
 
                 <span>
-                  -$
-                  {promotionDiscount.toFixed(
-                    2
-                  )}
+                  ${roomCharge.toFixed(2)}
                 </span>
               </div>
-            )}
 
-            <div className="mt-4 flex justify-between border-t-2 border-slate-300 pt-4 text-2xl font-black">
-              <span>
-                Amount Due
-              </span>
+              <div className="mt-2 flex justify-between">
+                <span>
+                  {taxLabel}
+                </span>
 
-              <span>
-                ${finalTotal.toFixed(2)}
-              </span>
+                <span>
+                  ${tax.toFixed(2)}
+                </span>
+              </div>
+
+              {promotionDiscount > 0 && (
+                <div className="mt-2 flex justify-between">
+                  <span>
+                    Promotion/Voucher
+                  </span>
+
+                  <span>
+                    -$
+                    {promotionDiscount.toFixed(
+                      2
+                    )}
+                  </span>
+                </div>
+              )}
+
+              <div className="mt-4 flex justify-between border-t-2 border-slate-300 pt-4 text-2xl font-black">
+                <span>
+                  Amount Due
+                </span>
+
+                <span>
+                  ${finalTotal.toFixed(2)}
+                </span>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="mt-8 rounded-lg border-2 border-orange-500 bg-orange-50 p-6">
-          <h2 className="text-2xl font-black text-orange-600">
-            Escape Room Mystery Promise
-          </h2>
+          <div className="mt-8 rounded-lg border-2 border-orange-500 bg-orange-50 p-6">
+            <h2 className="text-2xl font-black text-orange-600">
+              Escape Room Mystery Promise
+            </h2>
 
-          <p className="mt-4 text-lg font-black">
-            Life happens. We&apos;ve got you covered.
-          </p>
+            <p className="mt-4 text-lg font-black">
+              Life happens. We&apos;ve got you covered.
+            </p>
 
-          <p className="mt-2 text-lg font-black">
-            No hassle. No stress.
-          </p>
+            <p className="mt-2 text-lg font-black">
+              No hassle. No stress.
+            </p>
 
-          <p className="mt-4 text-lg leading-8">
-            If something comes up, just call us{" "}
-            <strong>
-              any time before your scheduled game
-            </strong>
-            . We&apos;ll take care of you.
-          </p>
-        </div>
-
-        {error && (
-          <div
-            role="alert"
-            aria-live="assertive"
-            className="mt-6 rounded border border-red-500 bg-red-50 p-4 text-sm font-bold text-red-700"
-          >
-            {error}
+            <p className="mt-4 text-lg leading-8">
+              If something comes up, just call us{" "}
+              <strong>
+                any time before your scheduled game
+              </strong>
+              . We&apos;ll take care of you.
+            </p>
           </div>
-        )}
 
-        <button
-          type="button"
-          onClick={handlePayNow}
-          disabled={isPaying}
-          className="mt-8 w-full rounded bg-orange-500 px-8 py-4 font-black uppercase text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-slate-400"
-        >
-          {isPaying
-            ? "Starting Payment..."
-            : "Proceed to Checkout"}
-        </button>
+          <div className="mt-8 grid gap-4">
+            <div>
+              <label
+                htmlFor="cardNumber"
+                className="mb-2 block font-black"
+              >
+                Card Number
+              </label>
 
-        <Link
-          href={bookingHref}
-          className="mt-6 inline-block text-sm font-black uppercase text-orange-500"
-        >
-          ← Change Room, Date, or Time
-        </Link>
-      </section>
-    </main>
+              <input
+                id="cardNumber"
+                type="text"
+                inputMode="numeric"
+                autoComplete="cc-number"
+                value={cardNumber}
+                onChange={(event) =>
+                  setCardNumber(event.target.value)
+                }
+                className="w-full rounded border-2 border-slate-300 px-4 py-3"
+                placeholder="4111111111111111"
+              />
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <label
+                  htmlFor="expirationMonth"
+                  className="mb-2 block font-black"
+                >
+                  Month
+                </label>
+
+                <input
+                  id="expirationMonth"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="cc-exp-month"
+                  value={expirationMonth}
+                  onChange={(event) =>
+                    setExpirationMonth(
+                      event.target.value
+                    )
+                  }
+                  className="w-full rounded border-2 border-slate-300 px-4 py-3"
+                  placeholder="12"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="expirationYear"
+                  className="mb-2 block font-black"
+                >
+                  Year
+                </label>
+
+                <input
+                  id="expirationYear"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="cc-exp-year"
+                  value={expirationYear}
+                  onChange={(event) =>
+                    setExpirationYear(
+                      event.target.value
+                    )
+                  }
+                  className="w-full rounded border-2 border-slate-300 px-4 py-3"
+                  placeholder="28"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="cardCode"
+                  className="mb-2 block font-black"
+                >
+                  CVV
+                </label>
+
+                <input
+                  id="cardCode"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="cc-csc"
+                  value={cardCode}
+                  onChange={(event) =>
+                    setCardCode(event.target.value)
+                  }
+                  className="w-full rounded border-2 border-slate-300 px-4 py-3"
+                  placeholder="123"
+                />
+              </div>
+            </div>
+          </div>
+
+          {error && (
+            <div
+              role="alert"
+              aria-live="assertive"
+              className="mt-6 rounded border border-red-500 bg-red-50 p-4 text-sm font-bold text-red-700"
+            >
+              {error}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={handlePayNow}
+            disabled={isPaying}
+            className="mt-8 w-full rounded bg-orange-500 px-8 py-4 font-black uppercase text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-slate-400"
+          >
+            {isPaying
+              ? "Starting Payment..."
+              : "Proceed to Checkout"}
+          </button>
+
+          <Link
+            href={bookingHref}
+            className="mt-6 inline-block text-sm font-black uppercase text-orange-500"
+          >
+            ← Change Room, Date, or Time
+          </Link>
+        </section>
+      </main>
+    </>
   );
 }
 
