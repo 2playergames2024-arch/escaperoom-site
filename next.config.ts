@@ -116,7 +116,7 @@ const securityHeaders = [
     key: "Content-Security-Policy",
     value: [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' https://bookeo.com https://*.bookeo.com https://www.clarity.ms https://*.clarity.ms https://www.googletagmanager.com https://connect.facebook.net",
+      "script-src 'self' 'unsafe-inline' https://bookeo.com https://*.bookeo.com https://www.clarity.ms https://*.clarity.ms https://www.googletagmanager.com https://connect.facebook.net https://jstest.authorize.net",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
       "font-src 'self' data:",
