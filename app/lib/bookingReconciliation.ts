@@ -43,6 +43,8 @@ const RECONCILIATION_ALERT_TTL_SECONDS =
 type LedgerRow = {
   checkout_id?: string;
   checkoutId?: string;
+  hold_id?: string | null;
+  holdId?: string | null;
   authorize_transaction_id?: string;
   authorizeTransactionId?: string;
   bookeo_booking_id?: string | null;
@@ -228,16 +230,44 @@ async function markManualReview({
 }
 
 async function loadBookingSession(
-  checkoutId: string
+  checkoutId: string,
+  holdId: string
 ) {
   /*
-   * booking-v2 uses the ERM checkout/session ID as
-   * the booking-session key. The session contains
-   * the trusted product/event/date/location fields
-   * needed for a read-only Bookeo lookup.
+   * First try checkoutId directly. Some booking-v2
+   * paths may use the same ERM id for both values.
    */
+  const directSession =
+    await redis.get<BookingSession>(
+      `booking-session:${checkoutId}`
+    );
+
+  if (directSession) {
+    return directSession;
+  }
+
+  /*
+   * The booking-session route maintains a durable
+   * hold -> session-id mapping. The ledger stores
+   * the current hold id, so delayed reconciliation
+   * can recover the actual Redis session key without
+   * assuming checkoutId === sessionId.
+   */
+  if (!holdId) {
+    return null;
+  }
+
+  const sessionId =
+    await redis.get<string>(
+      `booking-session-for-hold:${holdId}`
+    );
+
+  if (!sessionId) {
+    return null;
+  }
+
   return redis.get<BookingSession>(
-    `booking-session:${checkoutId}`
+    `booking-session:${sessionId}`
   );
 }
 
@@ -432,9 +462,17 @@ export async function reconcileBookingLedgerRow(
    * finalization flow. This lookup NEVER creates a
    * Bookeo booking.
    */
+  const holdId =
+    String(
+      row.hold_id ||
+      row.holdId ||
+      ""
+    ).trim();
+
   const session =
     await loadBookingSession(
-      checkoutId
+      checkoutId,
+      holdId
     );
 
   if (!session) {
