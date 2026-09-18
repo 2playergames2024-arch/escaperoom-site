@@ -55,13 +55,6 @@ export async function createFinalBookeoBooking(
   session: BookingSession,
   authorizeTransactionId: string
 ): Promise<FinalBookeoBookingResult> {
-  if (process.env.VERCEL_ENV === "preview") {
-    return {
-      ok: false,
-      reason: "UNCERTAIN",
-      message: "STEP 28 TEST: forced uncertain Bookeo create.",
-    };
-  }
 
   const BOOKEO_API_KEY =
     getBookeoApiKey(

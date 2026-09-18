@@ -65,13 +65,6 @@ function getBookeoApiKey(
 export async function lookupFinalBookeoBooking(
   session: BookingSession
 ): Promise<BookeoBookingLookupResult> {
-  if (process.env.VERCEL_ENV === "preview") {
-    return {
-      ok: true,
-      result: "AMBIGUOUS",
-      matches: 2,
-    };
-  }
   const BOOKEO_API_KEY =
     getBookeoApiKey(
       session.location
