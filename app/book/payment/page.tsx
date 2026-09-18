@@ -553,7 +553,7 @@ function PaymentPageContent() {
             </p>
 
             <p className="mt-2">
-              If you do not see it within a few minutes, please check your spam or junk folder.
+              If you do not see it, please check your spam or junk folder. Feel free to contact us and we can confirm your booking.
             </p>
           </div>
 

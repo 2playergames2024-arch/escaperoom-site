@@ -94,7 +94,7 @@ export async function createFinalBookeoBooking(
       session.holdId
     )}` +
     `&notifyUsers=false` +
-    `&notifyCustomer=false`;
+    `&notifyCustomer=true`;
 
   logBookingEvent(
     "bookeo.final_create_started",
