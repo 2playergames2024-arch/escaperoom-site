@@ -209,3 +209,46 @@ export async function getBookingLedgerRecordByAuthorizeTransactionId(
     record: rows[0],
   };
 }
+
+export async function getBookingLedgerReconciliationCandidates({
+  olderThanSeconds = 60,
+  newerThanHours = 6,
+  limit = 25,
+}: {
+  olderThanSeconds?: number;
+  newerThanHours?: number;
+  limit?: number;
+}) {
+  const sql = getSql();
+
+  const safeLimit =
+    Math.max(
+      1,
+      Math.min(
+        100,
+        Math.floor(limit)
+      )
+    );
+
+  const rows = await sql`
+    SELECT *
+    FROM booking_ledger
+    WHERE
+      authorize_transaction_id IS NOT NULL
+      AND status IN (
+        ${BOOKING_STATES.AUTHORIZED},
+        ${BOOKING_STATES.BOOKED},
+        ${BOOKING_STATES.CAPTURE_FAILED}
+      )
+      AND updated_at <=
+        NOW() -
+        (${olderThanSeconds} * INTERVAL '1 second')
+      AND updated_at >=
+        NOW() -
+        (${newerThanHours} * INTERVAL '1 hour')
+    ORDER BY updated_at ASC
+    LIMIT ${safeLimit}
+  `;
+
+  return rows;
+}

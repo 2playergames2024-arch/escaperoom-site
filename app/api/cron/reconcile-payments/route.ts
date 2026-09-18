@@ -6,20 +6,16 @@ import {
 import { Redis } from "@upstash/redis";
 
 import {
-  type PaymentAttempt,
-} from "../../../lib/booking";
-
+  getBookingLedgerReconciliationCandidates,
+} from "@/app/lib/bookingLedger";
 import {
-  completePaidBooking,
-} from "../../../lib/paymentCompletion";
+  reconcileBookingLedgerRow,
+} from "@/app/lib/bookingReconciliation";
 
 const redis = Redis.fromEnv();
 
-const RECOVERY_DELAY_MS =
-  60 * 1000;
-
-const MAX_AUTO_RECOVERY_AGE_MS =
-  6 * 60 * 60 * 1000;
+const RECONCILIATION_LOCK_SECONDS =
+  120;
 
 export async function GET(
   req: NextRequest
@@ -35,7 +31,7 @@ export async function GET(
   if (
     !cronSecret ||
     authHeader !==
-    `Bearer ${cronSecret}`
+      `Bearer ${cronSecret}`
   ) {
     return NextResponse.json(
       {
@@ -47,77 +43,147 @@ export async function GET(
     );
   }
 
-  let cursor = 0;
+  const candidates =
+    await getBookingLedgerReconciliationCandidates({
+      olderThanSeconds: 60,
+      newerThanHours: 6,
+      limit: 25,
+    });
 
   let checked = 0;
-  let attempted = 0;
-  let recovered = 0;
+  let locked = 0;
+  let repaired = 0;
+  let manualReview = 0;
+  let unchanged = 0;
 
-  do {
-    const [
-      nextCursor,
-      keys,
-    ] =
-      await redis.scan(
-        cursor,
+  const results: Array<{
+    checkoutId: string;
+    action: string;
+    ok: boolean;
+  }> = [];
+
+  for (const row of candidates) {
+    const checkoutId =
+      String(
+        row.checkout_id ||
+        row.checkoutId ||
+        ""
+      ).trim();
+
+    if (!checkoutId) {
+      continue;
+    }
+
+    checked++;
+
+    const lockKey =
+      `booking-v2-reconciliation-lock:${checkoutId}`;
+
+    const lockToken =
+      crypto.randomUUID();
+
+    const claimed =
+      await redis.set(
+        lockKey,
+        lockToken,
         {
-          match:
-            "payment-attempt:*",
-          count: 100,
+          nx: true,
+          ex:
+            RECONCILIATION_LOCK_SECONDS,
         }
       );
 
-    cursor =
-      Number(nextCursor);
+    if (claimed !== "OK") {
+      locked++;
+      continue;
+    }
 
-    for (const key of keys) {
-      const paymentAttempt =
-        await redis.get<PaymentAttempt>(
-          key
-        );
-
-      if (
-        !paymentAttempt ||
-        (
-          paymentAttempt.status !== "ready" &&
-          paymentAttempt.status !== "paid"
-        )
-      ) {
-        continue;
-      }
-
-      checked++;
-
-      const paymentAgeMs =
-        Date.now() -
-        paymentAttempt.updatedAt;
-
-      if (
-        paymentAgeMs <
-        RECOVERY_DELAY_MS ||
-        paymentAgeMs >
-        MAX_AUTO_RECOVERY_AGE_MS
-      ) {
-        continue;
-      }
-
-      attempted++;
-
+    try {
       const result =
-        await completePaidBooking(
-          paymentAttempt.sessionId
+        await reconcileBookingLedgerRow(
+          row
         );
 
-      if (result.ok) {
-        recovered++;
+      results.push({
+        checkoutId:
+          result.checkoutId,
+        action:
+          result.action,
+        ok:
+          result.ok,
+      });
+
+      if (
+        result.action ===
+          "MARKED_COMPLETE" ||
+        result.action ===
+          "BOOKEO_FOUND_AND_COMPLETE" ||
+        result.action ===
+          "BOOKEO_FOUND_AND_CAPTURED" ||
+        result.action ===
+          "CAPTURE_RECOVERED" ||
+        result.action ===
+          "MARKED_VOIDED"
+      ) {
+        repaired++;
+      } else if (
+        result.action ===
+        "MANUAL_REVIEW"
+      ) {
+        manualReview++;
+      } else {
+        unchanged++;
+      }
+    } catch (error) {
+      manualReview++;
+
+      console.error(
+        "booking-v2 delayed reconciliation failed.",
+        {
+          checkoutId,
+          reason:
+            error instanceof Error
+              ? error.name
+              : "unknown",
+        }
+      );
+    } finally {
+      try {
+        const currentToken =
+          await redis.get<string>(
+            lockKey
+          );
+
+        if (
+          currentToken ===
+          lockToken
+        ) {
+          await redis.del(
+            lockKey
+          );
+        }
+      } catch (error) {
+        console.error(
+          "booking-v2 reconciliation lock release failed.",
+          {
+            checkoutId,
+            reason:
+              error instanceof Error
+                ? error.name
+                : "unknown",
+          }
+        );
       }
     }
-  } while (cursor !== 0);
+  }
 
   return NextResponse.json({
     ok: true,
     checked,
-    attempted,
-    recovered,
+    locked,
+    repaired,
+    manualReview,
+    unchanged,
+    results,
   });
 }
