@@ -176,3 +176,36 @@ export async function markBookingCaptureComplete(
 
   return rows[0] ?? null;
 }
+
+export async function getBookingLedgerRecordByAuthorizeTransactionId(
+  authorizeTransactionId: string
+) {
+  const sql = getSql();
+
+  const rows = await sql`
+    SELECT *
+    FROM booking_ledger
+    WHERE authorize_transaction_id = ${authorizeTransactionId}
+    ORDER BY created_at ASC
+    LIMIT 2
+  `;
+
+  if (rows.length === 0) {
+    return {
+      kind: "NOT_FOUND" as const,
+      record: null,
+    };
+  }
+
+  if (rows.length > 1) {
+    return {
+      kind: "AMBIGUOUS" as const,
+      record: null,
+    };
+  }
+
+  return {
+    kind: "FOUND" as const,
+    record: rows[0],
+  };
+}

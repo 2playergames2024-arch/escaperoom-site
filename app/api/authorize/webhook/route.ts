@@ -1,144 +1,66 @@
-import { after, NextResponse } from "next/server";
-import { Redis } from "@upstash/redis";
-import { createHmac, timingSafeEqual } from "crypto";
-import { Resend } from "resend";
+import { NextResponse } from "next/server";
 import {
-  type BookingSession,
-  type PaymentAttempt,
-  type AuthorizeEvent,
-  type DuplicatePaymentIncident,
-  type OrphanPayment,
-  isValidBookingSessionId,
-} from "../../../lib/booking";
+  createHmac,
+  timingSafeEqual,
+} from "crypto";
 
-import { completePaidBooking } from "../../../lib/paymentCompletion";
+import {
+  getSandboxTransactionState,
+} from "@/app/lib/authorizeSandbox";
+import {
+  getBookingLedgerRecordByAuthorizeTransactionId,
+  markBookingCaptureComplete,
+  updateBookingLedgerRecord,
+} from "@/app/lib/bookingLedger";
+import {
+  BOOKING_STATES,
+} from "@/app/lib/bookingState";
 
-const redis = Redis.fromEnv();
+const HANDLED_PAYMENT_EVENTS =
+  new Set([
+    "net.authorize.payment.authorization.created",
+    "net.authorize.payment.priorAuthCapture.created",
+    "net.authorize.payment.authcapture.created",
+    "net.authorize.payment.void.created",
+  ]);
 
-const resend = new Resend(
-  process.env.RESEND_API_KEY
-);
+const CAPTURED_STATUSES =
+  new Set([
+    "capturedPendingSettlement",
+    "settledSuccessfully",
+  ]);
 
-const PAYMENT_STATE_TTL_SECONDS =
-  60 * 60 * 24 * 30;
+const AUTHORIZED_STATUS =
+  "authorizedPendingCapture";
 
-async function sendDuplicatePaymentAlert(
-  incident: DuplicatePaymentIncident
-) {
-  const alertKey =
-    `duplicate-payment-alert-sent:${incident.sessionId}:${incident.duplicateTransactionId}`;
+const VOIDED_STATUS =
+  "voided";
 
-  const claimed =
-    await redis.set(
-      alertKey,
-      "1",
-      {
-        nx: true,
-        ex:
-          PAYMENT_STATE_TTL_SECONDS,
-      }
-    );
+function verifyWebhookSignature({
+  rawBodyBuffer,
+  receivedSignature,
+  signatureKey,
+}: {
+  rawBodyBuffer: Buffer;
+  receivedSignature: string;
+  signatureKey: string;
+}) {
+  const normalizedSignature =
+    receivedSignature
+      .replace(/^sha512=/i, "")
+      .trim()
+      .toLowerCase();
 
-  if (claimed !== "OK") {
-    return;
+  if (
+    !/^[0-9a-f]{128}$/i.test(
+      normalizedSignature
+    )
+  ) {
+    return false;
   }
 
-  try {
-    await resend.emails.send({
-      from:
-        "Escape Room Mystery <info@escaperoommystery.com>",
-      to:
-        "info@escaperoommystery.com",
-      subject:
-        "URGENT: Possible duplicate customer payment",
-      text:
-        `A second Authorize.Net payment event was received for the same booking session.
-
-Session: ${incident.sessionId}
-Original transaction: ${incident.originalTransactionId}
-Additional transaction: ${incident.duplicateTransactionId}
-Customer: ${incident.booking.firstName} ${incident.booking.lastName}
-Email: ${incident.booking.email}
-Phone: ${incident.booking.phone}
-Location: ${incident.booking.location}
-Room: ${incident.booking.roomName}
-Date: ${incident.booking.date}
-Time: ${incident.booking.time}
-Amount: $${incident.booking.total}
-
-Do not create another booking automatically from the additional transaction. Review both Authorize.Net transactions and the Bookeo booking state.`,
-    });
-  } catch (error) {
-    await redis.del(
-      alertKey
-    );
-
-    console.error(
-      "Duplicate-payment alert email failed.",
-      {
-        sessionId:
-          incident.sessionId,
-        reason:
-          error instanceof Error
-            ? error.name
-            : "unknown",
-      }
-    );
-  }
-}
-
-export async function POST(req: Request) {
-  try {
-    const signatureKey =
-      process.env.AUTHORIZE_SIGNATURE_KEY;
-
-    if (!signatureKey) {
-      console.error(
-        "AUTHORIZE_SIGNATURE_KEY is missing."
-      );
-
-      return NextResponse.json(
-        {
-          error:
-            "Webhook verification is not configured.",
-        },
-        { status: 500 }
-      );
-    }
-
-    /*
-     * Read the exact webhook body bytes before parsing.
-     */
-    const rawBodyBuffer = Buffer.from(
-      await req.arrayBuffer()
-    );
-
-    const rawBody =
-      rawBodyBuffer.toString("utf8");
-
-    const receivedSignature =
-      req.headers.get("x-anet-signature") || "";
-
-    if (!receivedSignature) {
-      return NextResponse.json(
-        { error: "Missing webhook signature." },
-        { status: 401 }
-      );
-    }
-
-    const normalizedSignature =
-      receivedSignature
-        .replace(/^sha512=/i, "")
-        .trim()
-        .toLowerCase();
-
-    /*
-     * IMPORTANT:
-     * Authorize.net's actual webhook signature
-     * matches HMAC-SHA512 when the 128-character
-     * Signature Key is used as the literal key.
-     */
-    const calculatedSignature = createHmac(
+  const calculatedSignature =
+    createHmac(
       "sha512",
       signatureKey.trim()
     )
@@ -146,88 +68,91 @@ export async function POST(req: Request) {
       .digest("hex")
       .toLowerCase();
 
-    /*
-     * Validate that the received signature is
-     * properly formatted before converting it.
-     */
-    if (
-      !/^[0-9a-f]{128}$/i.test(
-        normalizedSignature
-      )
-    ) {
-      console.error(
-        "AUTHORIZE.NET WEBHOOK SIGNATURE FORMAT INVALID"
-      );
-
-      return NextResponse.json(
-        { error: "Invalid webhook signature." },
-        { status: 401 }
-      );
-    }
-
-    const receivedBuffer = Buffer.from(
+  const receivedBuffer =
+    Buffer.from(
       normalizedSignature,
       "hex"
     );
 
-    const calculatedBuffer = Buffer.from(
+  const calculatedBuffer =
+    Buffer.from(
       calculatedSignature,
       "hex"
     );
 
-    if (
-      receivedBuffer.length !==
-      calculatedBuffer.length ||
-      !timingSafeEqual(
-        receivedBuffer,
-        calculatedBuffer
-      )
-    ) {
+  return (
+    receivedBuffer.length ===
+      calculatedBuffer.length &&
+    timingSafeEqual(
+      receivedBuffer,
+      calculatedBuffer
+    )
+  );
+}
+
+export async function POST(
+  request: Request
+) {
+  try {
+    /*
+     * booking-v2 Preview uses its own sandbox
+     * Signature Key. Production credentials are
+     * deliberately not used here.
+     */
+    const signatureKey =
+      process.env
+        .AUTHORIZE_SANDBOX_SIGNATURE_KEY;
+
+    if (!signatureKey) {
       console.error(
-        "AUTHORIZE.NET WEBHOOK SIGNATURE VERIFICATION FAILED"
+        "AUTHORIZE_SANDBOX_SIGNATURE_KEY is missing."
       );
 
       return NextResponse.json(
-        { error: "Invalid webhook signature." },
-        { status: 401 }
+        {
+          error:
+            "Webhook verification is not configured.",
+        },
+        {
+          status: 500,
+        }
       );
     }
 
     /*
-     * Signature is valid.
-     * Only now do we parse and trust the body.
+     * Verify the exact raw bytes before parsing.
      */
-    const body = JSON.parse(rawBody);
+    const rawBodyBuffer =
+      Buffer.from(
+        await request.arrayBuffer()
+      );
 
-    const webhookReceivedAt =
-      Date.now();
+    const receivedSignature =
+      request.headers.get(
+        "x-anet-signature"
+      ) || "";
 
-    console.info(
-      "BOOKING_TIMELINE",
-      {
-        stage:
-          "authorize_webhook_received",
+    if (
+      !receivedSignature ||
+      !verifyWebhookSignature({
+        rawBodyBuffer,
+        receivedSignature,
+        signatureKey,
+      })
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Invalid webhook signature.",
+        },
+        {
+          status: 401,
+        }
+      );
+    }
 
-        occurredAt:
-          new Date(
-            webhookReceivedAt
-          ).toISOString(),
-
-        eventType:
-          String(
-            body?.eventType || ""
-          ),
-
-        transactionId:
-          String(
-            body?.payload?.id || ""
-          ),
-
-        sessionId:
-          String(
-            body?.payload?.merchantReferenceId || ""
-          ),
-      }
+    const body = JSON.parse(
+      rawBodyBuffer.toString("utf8")
     );
 
     const eventType = String(
@@ -236,367 +161,340 @@ export async function POST(req: Request) {
 
     const transactionId = String(
       body?.payload?.id || ""
-    );
-
-    const sessionId = String(
-      body?.payload?.merchantReferenceId || ""
-    );
+    ).trim();
 
     /*
-     * Only process the payment event we expect.
+     * Ignore unrelated Authorize.Net events.
+     * They are still acknowledged successfully.
      */
     if (
-      eventType !==
-      "net.authorize.payment.authcapture.created"
-    ) {
-      return NextResponse.json({
-        received: true,
-      });
-    }
-
-    /*
-     * Test webhooks and unrelated transactions
-     * may not contain one of our ERM session IDs.
-     * Acknowledge them without storing anything.
-     */
-    if (
-      !transactionId ||
-      !isValidBookingSessionId(
-        sessionId
+      !HANDLED_PAYMENT_EVENTS.has(
+        eventType
       )
     ) {
       return NextResponse.json({
         received: true,
+        ignored: true,
+      });
+    }
+
+    if (!transactionId) {
+      return NextResponse.json({
+        received: true,
+        ignored: true,
       });
     }
 
     /*
-     * A durable payment-attempt snapshot is created
-     * before the customer is sent to Accept Hosted.
-     * Use it even if the one-hour booking session has
-     * expired by the time the signed webhook arrives.
-     *
-     * Backward compatibility: for an in-flight payment
-     * created before this deployment, fall back to the
-     * still-existing booking session and preserve it now.
+     * The webhook payload is only a notification.
+     * Match by the AuthNet transaction ID already
+     * stored in Postgres; never bind by browser data.
      */
-    const paymentAttemptKey =
-      `payment-attempt:${sessionId}`;
-
-    let paymentAttempt =
-      await redis.get<PaymentAttempt>(
-        paymentAttemptKey
+    const ledgerLookup =
+      await getBookingLedgerRecordByAuthorizeTransactionId(
+        transactionId
       );
 
-    if (!paymentAttempt) {
-      const bookingSession =
-        await redis.get<BookingSession>(
-          `booking-session:${sessionId}`
-        );
-
-      if (!bookingSession) {
-        console.error(
-          "Valid payment webhook could not be matched to durable booking data.",
-          {
-            sessionId,
-            transactionId,
-          }
-        );
-
-        return NextResponse.json({
-          received: true,
-        });
-      }
-
-      const now =
-        Date.now();
-
-      paymentAttempt = {
-        sessionId,
-        claimId:
-          "legacy-webhook-recovery",
-        session:
-          bookingSession,
-        status:
-          "ready",
-        createdAt:
-          bookingSession.createdAt,
-        updatedAt:
-          now,
-      };
-
-      await redis.set(
-        paymentAttemptKey,
-        paymentAttempt,
+    if (
+      ledgerLookup.kind ===
+      "NOT_FOUND"
+    ) {
+      console.warn(
+        "Authorize.Net webhook did not match a booking ledger transaction.",
         {
-          ex:
-            PAYMENT_STATE_TTL_SECONDS,
+          eventType,
+          transactionId,
         }
       );
+
+      return NextResponse.json({
+        received: true,
+        unmatched: true,
+      });
     }
 
     if (
-      paymentAttempt.session.sessionId !==
-      sessionId
+      ledgerLookup.kind ===
+      "AMBIGUOUS"
     ) {
       console.error(
-        "Payment-attempt session mismatch.",
+        "Authorize.Net transaction ID matched multiple booking ledger rows.",
         {
-          sessionId,
+          eventType,
           transactionId,
         }
       );
 
       return NextResponse.json(
         {
-          error:
-            "Payment session mismatch.",
+          received: true,
+          reconciliationStopped:
+            true,
         },
-        { status: 409 }
+        {
+          status: 409,
+        }
       );
     }
 
-    const authorizeEventKey =
-      `authorize-event:${sessionId}`;
+    const ledger =
+      ledgerLookup.record;
 
-    const authorizeEvent:
-      AuthorizeEvent = {
-      eventType,
-      transactionId,
-      sessionId,
-      receivedAt:
-        Date.now(),
-    };
-
-    /*
-     * First successful transaction wins.
-     * A later webhook may be a harmless replay of the
-     * same transaction; acknowledge it idempotently.
-     * A DIFFERENT transaction must never overwrite the
-     * original binding.
-     */
-    const eventClaim =
-      await redis.set(
-        authorizeEventKey,
-        authorizeEvent,
+    if (!ledger) {
+      return NextResponse.json(
         {
-          nx: true,
-          ex:
-            PAYMENT_STATE_TTL_SECONDS,
+          received: true,
+          reconciliationStopped:
+            true,
+        },
+        {
+          status: 409,
         }
       );
+    }
 
-    if (eventClaim !== "OK") {
-      const existingEvent =
-        await redis.get<AuthorizeEvent>(
-          authorizeEventKey
-        );
+    /*
+     * Independently ask Authorize.Net for the
+     * actual transaction state. Never trust the
+     * webhook event name alone to mutate money state.
+     */
+    const gatewayState =
+      await getSandboxTransactionState(
+        transactionId
+      );
+
+    if (!gatewayState.ok) {
+      await updateBookingLedgerRecord({
+        checkoutId:
+          String(
+            ledger.checkout_id ||
+            ledger.checkoutId
+          ),
+        errorCode:
+          "WEBHOOK_AUTHNET_STATE_UNCONFIRMED",
+        errorMessage:
+          gatewayState.message,
+        errorData: {
+          eventType,
+          transactionId,
+          uncertain:
+            gatewayState.uncertain,
+        },
+      });
+
+      /*
+       * Return non-200 so Authorize.Net can retry
+       * delivery. We did not reconcile anything.
+       */
+      return NextResponse.json(
+        {
+          error:
+            "Authorize.Net transaction state could not be confirmed.",
+        },
+        {
+          status: 502,
+        }
+      );
+    }
+
+    const checkoutId =
+      String(
+        ledger.checkout_id ||
+        ledger.checkoutId
+      );
+
+    const currentStatus =
+      String(
+        ledger.status || ""
+      );
+
+    const bookeoBookingId =
+      String(
+        ledger.bookeo_booking_id ||
+        ledger.bookeoBookingId ||
+        ""
+      );
+
+    /*
+     * Captured/settled money may only move our
+     * ledger to COMPLETE if Bookeo is already
+     * positively known to exist.
+     *
+     * The webhook NEVER creates a Bookeo booking.
+     */
+    if (
+      CAPTURED_STATUSES.has(
+        gatewayState.status
+      )
+    ) {
+      if (
+        currentStatus ===
+          BOOKING_STATES.COMPLETE
+      ) {
+        return NextResponse.json({
+          received: true,
+          reconciled: true,
+          alreadyComplete: true,
+        });
+      }
 
       if (
-        existingEvent?.transactionId ===
-        transactionId
+        bookeoBookingId &&
+        (
+          currentStatus ===
+            BOOKING_STATES.BOOKED ||
+          currentStatus ===
+            BOOKING_STATES.CAPTURE_FAILED
+        )
       ) {
-        /*
-         * Harmless webhook redelivery. Continue
-         * idempotently so any durable payment state
-         * missed by an earlier partial failure is
-         * repaired below.
-         */
-      } else if (
-        existingEvent?.transactionId
-      ) {
-        const incident:
-          DuplicatePaymentIncident = {
-          sessionId,
-          originalTransactionId:
-            existingEvent.transactionId,
-          duplicateTransactionId:
-            transactionId,
-          detectedAt:
-            Date.now(),
-          booking:
-            paymentAttempt.session,
-        };
-
-        await redis.set(
-          `duplicate-payment:${sessionId}:${transactionId}`,
-          incident,
-          {
-            ex:
-              PAYMENT_STATE_TTL_SECONDS,
-          }
-        );
-
-        await sendDuplicatePaymentAlert(
-          incident
-        );
-
-        console.error(
-          "Additional Authorize.Net transaction detected for booking session.",
-          {
-            sessionId,
-            originalTransactionId:
-              existingEvent.transactionId,
-            duplicateTransactionId:
-              transactionId,
-          }
+        await markBookingCaptureComplete(
+          checkoutId
         );
 
         return NextResponse.json({
           received: true,
-          duplicatePayment:
-            true,
+          reconciled: true,
+          status:
+            BOOKING_STATES.COMPLETE,
         });
-      } else {
-        return NextResponse.json(
-          {
-            error:
-              "Could not safely bind the payment transaction.",
-          },
-          { status: 409 }
-        );
       }
+
+      /*
+       * Captured money without a confirmed Bookeo
+       * booking is not safe to auto-resolve here.
+       * Preserve state for Step 26 reconciliation.
+       */
+      await updateBookingLedgerRecord({
+        checkoutId,
+        errorCode:
+          "WEBHOOK_CAPTURED_WITHOUT_CONFIRMED_BOOKEO",
+        errorMessage:
+          "Authorize.Net reports captured payment, but Postgres does not contain a confirmed Bookeo booking.",
+        errorData: {
+          eventType,
+          transactionId,
+          gatewayStatus:
+            gatewayState.status,
+          ledgerStatus:
+            currentStatus,
+        },
+      });
+
+      return NextResponse.json({
+        received: true,
+        reconciliationRequired: true,
+      });
     }
 
-    const paidAt =
-      Date.now();
-
-    const paidAttempt:
-      PaymentAttempt = {
-      ...paymentAttempt,
-      status:
-        "paid",
-      transactionId,
-      paidAt,
-      updatedAt:
-        paidAt,
-    };
-
-    await redis.set(
-      paymentAttemptKey,
-      paidAttempt,
-      {
-        ex:
-          PAYMENT_STATE_TTL_SECONDS,
-      }
-    );
+    /*
+     * Authorization-only events are informational.
+     * The synchronous payment route owns normal
+     * AUTHORIZED progression and Bookeo creation.
+     */
+    if (
+      gatewayState.status ===
+      AUTHORIZED_STATUS
+    ) {
+      return NextResponse.json({
+        received: true,
+        reconciled: true,
+        status:
+          currentStatus,
+      });
+    }
 
     /*
-     * Preserve a durable recovery-visible record as soon
-     * as money has moved. Normal successful Bookeo
-     * finalization deletes orphan-payment:${sessionId}.
-     * If the browser never returns, this record remains
-     * visible to the protected recovery administration.
+     * A confirmed void may safely reconcile a
+     * non-booked authorization to VOIDED.
+     * Never overwrite COMPLETE, BOOKED, or
+     * CAPTURE_FAILED automatically.
      */
-    const booking =
-      paymentAttempt.session;
+    if (
+      gatewayState.status ===
+      VOIDED_STATUS
+    ) {
+      if (
+        currentStatus ===
+          BOOKING_STATES.AUTHORIZED ||
+        currentStatus ===
+          BOOKING_STATES.AUTHORIZING
+      ) {
+        await updateBookingLedgerRecord({
+          checkoutId,
+          status:
+            BOOKING_STATES.VOIDED,
+          errorCode:
+            "WEBHOOK_CONFIRMED_VOID",
+          errorMessage:
+            "Authorize.Net webhook reconciliation confirmed that the authorization was voided.",
+          errorData: {
+            eventType,
+            transactionId,
+            gatewayStatus:
+              gatewayState.status,
+          },
+        });
 
-    const paidPending:
-      OrphanPayment = {
-      sessionId,
-      transactionId,
-      amount:
-        booking.total,
-      holdId:
-        booking.holdId,
-      productId:
-        booking.productId,
-      eventId:
-        booking.eventId,
-      players:
-        booking.players,
-      location:
-        booking.location,
-      date:
-        booking.date,
-      time:
-        booking.time,
-      firstName:
-        booking.firstName,
-      lastName:
-        booking.lastName,
-      email:
-        booking.email,
-      phone:
-        booking.phone,
-      bookeoError: {
-        stage:
-          "payment_received_pending_finalization",
+        return NextResponse.json({
+          received: true,
+          reconciled: true,
+          status:
+            BOOKING_STATES.VOIDED,
+        });
+      }
+
+      return NextResponse.json({
+        received: true,
+        reconciled: true,
+        status:
+          currentStatus,
+      });
+    }
+
+    /*
+     * Unknown/other terminal statuses are recorded
+     * for later reconciliation but never cause a
+     * Bookeo action or a blind payment action.
+     */
+    await updateBookingLedgerRecord({
+      checkoutId,
+      errorCode:
+        "WEBHOOK_UNHANDLED_AUTHNET_STATUS",
+      errorMessage:
+        `Authorize.Net webhook reconciliation returned status ${gatewayState.status}.`,
+      errorData: {
+        eventType,
+        transactionId,
+        gatewayStatus:
+          gatewayState.status,
+        ledgerStatus:
+          currentStatus,
       },
-      createdAt:
-        paidAt,
-      status:
-        "needs_recovery",
-      failureType:
-        "payment_received_pending_finalization",
-    };
-
-    await redis.set(
-      `orphan-payment:${sessionId}`,
-      paidPending,
-      {
-        nx: true,
-        ex:
-          PAYMENT_STATE_TTL_SECONDS,
-      }
-    );
-
-    /*
-     * Complete the paid booking server-side after the
-     * webhook response is ready. The customer's browser
-     * is no longer required to return from Authorize.Net
-     * in order for Bookeo finalization to occur.
-     */
-    after(async () => {
-      try {
-        const result =
-          await completePaidBooking(
-            sessionId
-          );
-
-        if (!result.ok) {
-          console.error(
-            "Automatic paid-booking completion did not finish successfully.",
-            {
-              sessionId,
-              status:
-                result.status,
-              pending:
-                result.pending || false,
-              recoveryRequired:
-                result.recoveryRequired ||
-                false,
-            }
-          );
-        }
-      } catch (error) {
-        console.error(
-          "Automatic paid-booking completion failed unexpectedly.",
-          {
-            sessionId,
-            error:
-              error instanceof Error
-                ? error.name
-                : "unknown",
-          }
-        );
-      }
     });
 
     return NextResponse.json({
       received: true,
+      reconciliationRequired: true,
     });
   } catch (error) {
     console.error(
-      "AUTHORIZE.NET WEBHOOK ERROR:",
-      error
+      "AUTHORIZE.NET BOOKING-V2 WEBHOOK ERROR",
+      {
+        reason:
+          error instanceof Error
+            ? error.name
+            : "unknown",
+      }
     );
 
     return NextResponse.json(
       {
-        error: "Webhook processing failed.",
+        error:
+          "Webhook processing failed.",
       },
-      { status: 500 }
+      {
+        status: 500,
+      }
     );
   }
 }
