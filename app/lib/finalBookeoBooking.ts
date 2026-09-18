@@ -55,7 +55,18 @@ export async function createFinalBookeoBooking(
   session: BookingSession,
   authorizeTransactionId: string
 ): Promise<FinalBookeoBookingResult> {
-  
+  if (process.env.VERCEL_ENV === "preview") {
+    return {
+      ok: false,
+      reason: "REJECTED",
+      status: 400,
+      message: "STEP 28 TEST: forced Bookeo rejection.",
+      data: {
+        testOnly: true,
+      },
+    };
+  }
+
   const BOOKEO_API_KEY =
     getBookeoApiKey(
       session.location
