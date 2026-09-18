@@ -342,11 +342,17 @@ export async function getBookingLedgerReconciliationCandidates({
     SELECT *
     FROM booking_ledger
     WHERE
-      authorize_transaction_id IS NOT NULL
-      AND status IN (
-        ${BOOKING_STATES.AUTHORIZED},
-        ${BOOKING_STATES.BOOKED},
-        ${BOOKING_STATES.CAPTURE_FAILED}
+      (
+        (
+          authorize_transaction_id IS NOT NULL
+          AND status IN (
+            ${BOOKING_STATES.AUTHORIZED},
+            ${BOOKING_STATES.BOOKED},
+            ${BOOKING_STATES.CAPTURE_FAILED}
+          )
+        )
+        OR status =
+          ${BOOKING_STATES.AUTHORIZING}
       )
       AND updated_at <=
         NOW() -

@@ -490,6 +490,14 @@ export async function POST(
           amount:
             amount.toFixed(2),
 
+          order: {
+            invoiceNumber:
+              session.checkoutId.slice(
+                0,
+                20
+              ),
+          },
+
           payment: {
             opaqueData: {
               dataDescriptor:
@@ -516,78 +524,135 @@ export async function POST(
       }
     );
 
-    const authorizeResponse =
-      await fetch(
-        AUTHORIZE_SANDBOX_URL,
-        {
-          method: "POST",
-          cache: "no-store",
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
-          body: JSON.stringify(
-            authorizeRequest
-          ),
-          signal:
-            AbortSignal.timeout(
-              15_000
-            ),
-        }
+    const authorizationInvoiceNumber =
+      session.checkoutId.slice(
+        0,
+        20
       );
 
-    if (!authorizeResponse.ok) {
-      /*
-       * We do NOT automatically retry here.
-       *
-       * Once AUTH-ONLY was sent, an uncertain
-       * network result must not cause a second
-       * authorization attempt.
-       */
+    let authorizeResponse: Response;
+
+    try {
+      authorizeResponse =
+        await fetch(
+          AUTHORIZE_SANDBOX_URL,
+          {
+            method: "POST",
+            cache: "no-store",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify(
+              authorizeRequest
+            ),
+            signal:
+              AbortSignal.timeout(
+                15_000
+              ),
+          }
+        );
+    } catch (error) {
+      await updateBookingLedgerRecord({
+        checkoutId:
+          session.checkoutId,
+        errorCode:
+          "AUTHORIZATION_RESULT_UNCERTAIN",
+        errorMessage:
+          "Authorize.Net may have received the AUTH-ONLY request, but no response was confirmed.",
+        errorData: {
+          invoiceNumber:
+            authorizationInvoiceNumber,
+          reason:
+            error instanceof Error
+              ? error.name
+              : "unknown",
+        },
+      });
+
       return NextResponse.json(
         {
           error:
             "Authorize.Net did not return a confirmed result.",
           uncertain: true,
         },
-        {
-          status: 502,
-        }
+        { status: 502 }
       );
     }
 
-    const authorizeData =
-      await authorizeResponse.json();
+    let authorizeData: any = null;
+
+    try {
+      authorizeData =
+        await authorizeResponse.json();
+    } catch {
+      authorizeData = null;
+    }
 
     const transactionResponse =
-      authorizeData
-        ?.transactionResponse;
+      authorizeData?.transactionResponse;
 
     const responseCode =
       String(
-        transactionResponse
-          ?.responseCode || ""
+        transactionResponse?.responseCode ||
+        ""
       );
 
     const transactionId =
       String(
-        transactionResponse
-          ?.transId || ""
-      );
+        transactionResponse?.transId ||
+        ""
+      ).trim();
+
+    const confirmedTransactionId =
+      transactionId && transactionId !== "0"
+        ? transactionId
+        : "";
 
     const transactionMessage =
       String(
-        transactionResponse
-          ?.messages?.[0]
+        transactionResponse?.messages?.[0]
           ?.description ||
-        transactionResponse
-          ?.errors?.[0]
+        transactionResponse?.errors?.[0]
           ?.errorText ||
-        authorizeData
-          ?.messages?.message?.[0]
+        authorizeData?.messages?.message?.[0]
           ?.text ||
         ""
       );
+
+    if (!authorizeResponse.ok) {
+      await updateBookingLedgerRecord({
+        checkoutId:
+          session.checkoutId,
+        ...(confirmedTransactionId
+          ? {
+              authorizeTransactionId:
+                confirmedTransactionId,
+            }
+          : {}),
+        errorCode:
+          "AUTHORIZATION_RESULT_UNCERTAIN",
+        errorMessage:
+          "Authorize.Net returned a non-success HTTP result after AUTH-ONLY was sent.",
+        errorData: {
+          invoiceNumber:
+            authorizationInvoiceNumber,
+          httpStatus:
+            authorizeResponse.status,
+          authorizeTransactionId:
+            confirmedTransactionId || null,
+        },
+      });
+
+      return NextResponse.json(
+        {
+          error:
+            "Authorize.Net did not return a confirmed result.",
+          uncertain: true,
+        },
+        { status: 502 }
+      );
+    }
 
     /*
      * responseCode 1 = approved.
@@ -1601,16 +1666,40 @@ export async function POST(
      * Anything else is ambiguous.
      * Leave the ledger AUTHORIZING so we do not
      * accidentally send another authorization.
+     * Persist any transaction ID Authorize.Net did
+     * return so delayed reconciliation can own it.
      */
+    await updateBookingLedgerRecord({
+      checkoutId:
+        session.checkoutId,
+      ...(confirmedTransactionId
+        ? {
+            authorizeTransactionId:
+              confirmedTransactionId,
+          }
+        : {}),
+      errorCode:
+        "AUTHORIZATION_RESULT_UNCERTAIN",
+      errorMessage:
+        transactionMessage ||
+        "Authorize.Net returned an ambiguous authorization result.",
+      errorData: {
+        invoiceNumber:
+          authorizationInvoiceNumber,
+        responseCode:
+          responseCode || null,
+        authorizeTransactionId:
+          confirmedTransactionId || null,
+      },
+    });
+
     return NextResponse.json(
       {
         error:
           "Authorize.Net did not return a confirmed authorization result.",
         uncertain: true,
       },
-      {
-        status: 502,
-      }
+      { status: 502 }
     );
   } catch (error) {
     console.error(

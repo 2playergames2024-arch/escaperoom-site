@@ -9,6 +9,174 @@ const AUTHORIZE_SANDBOX_TRANSACTION_KEY =
 const AUTHORIZE_SANDBOX_URL =
   "https://apitest.authorize.net/xml/v1/request.api";
 
+export type SandboxInvoiceLookupResult =
+  | {
+      ok: true;
+      result: "FOUND";
+      transactionId: string;
+      transactionStatus: string;
+    }
+  | {
+      ok: true;
+      result: "NO_MATCH";
+    }
+  | {
+      ok: true;
+      result: "AMBIGUOUS";
+      matches: number;
+    }
+  | {
+      ok: false;
+      message: string;
+      uncertain: boolean;
+    };
+
+export async function findSandboxUnsettledTransactionByInvoiceNumber(
+  invoiceNumber: string
+): Promise<SandboxInvoiceLookupResult> {
+  if (
+    !AUTHORIZE_SANDBOX_LOGIN_ID ||
+    !AUTHORIZE_SANDBOX_TRANSACTION_KEY
+  ) {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net sandbox credentials are not configured.",
+      uncertain: false,
+    };
+  }
+
+  const normalizedInvoiceNumber =
+    invoiceNumber.trim();
+
+  if (!normalizedInvoiceNumber) {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net invoice number is missing.",
+      uncertain: false,
+    };
+  }
+
+  try {
+    const response =
+      await fetch(
+        AUTHORIZE_SANDBOX_URL,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            getUnsettledTransactionListRequest: {
+              merchantAuthentication: {
+                name:
+                  AUTHORIZE_SANDBOX_LOGIN_ID,
+                transactionKey:
+                  AUTHORIZE_SANDBOX_TRANSACTION_KEY,
+              },
+              sorting: {
+                orderBy:
+                  "submitTimeUTC",
+                orderDescending:
+                  true,
+              },
+              paging: {
+                limit: 1000,
+                offset: 1,
+              },
+            },
+          }),
+          signal:
+            AbortSignal.timeout(
+              15_000
+            ),
+        }
+      );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        message:
+          "Authorize.Net could not list unsettled transactions.",
+        uncertain: true,
+      };
+    }
+
+    const data =
+      await response.json();
+
+    const transactions =
+      Array.isArray(data?.transactions)
+        ? data.transactions
+        : [];
+
+    const matches =
+      transactions.filter(
+        (transaction: any) =>
+          String(
+            transaction?.invoiceNumber ||
+            ""
+          ).trim() ===
+          normalizedInvoiceNumber
+      );
+
+    if (matches.length === 0) {
+      return {
+        ok: true,
+        result: "NO_MATCH",
+      };
+    }
+
+    if (matches.length > 1) {
+      return {
+        ok: true,
+        result: "AMBIGUOUS",
+        matches:
+          matches.length,
+      };
+    }
+
+    const transactionId =
+      String(
+        matches[0]?.transId ||
+        ""
+      ).trim();
+
+    if (
+      !transactionId ||
+      transactionId === "0"
+    ) {
+      return {
+        ok: false,
+        message:
+          "Authorize.Net found the invoice but did not return a usable transaction ID.",
+        uncertain: true,
+      };
+    }
+
+    return {
+      ok: true,
+      result: "FOUND",
+      transactionId,
+      transactionStatus:
+        String(
+          matches[0]?.transactionStatus ||
+          ""
+        ),
+    };
+  } catch {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net could not confirm the unsettled transaction list.",
+      uncertain: true,
+    };
+  }
+}
+
 export type VoidAuthorizationResult =
   | {
       ok: true;

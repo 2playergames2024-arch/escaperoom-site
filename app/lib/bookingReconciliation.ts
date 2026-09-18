@@ -7,7 +7,9 @@ import {
   type BookingSession,
 } from "@/app/lib/booking";
 import {
+  findSandboxUnsettledTransactionByInvoiceNumber,
   getSandboxTransactionState,
+  voidSandboxAuthorization,
 } from "@/app/lib/authorizeSandbox";
 import {
   lookupFinalBookeoBooking,
@@ -48,8 +50,8 @@ type LedgerRow = {
   checkoutId?: string;
   hold_id?: string | null;
   holdId?: string | null;
-  authorize_transaction_id?: string;
-  authorizeTransactionId?: string;
+  authorize_transaction_id?: string | null;
+  authorizeTransactionId?: string | null;
   bookeo_booking_id?: string | null;
   bookeoBookingId?: string | null;
   status?: string;
@@ -295,7 +297,7 @@ export async function reconcileBookingLedgerRow(
     }
   );
 
-  const transactionId =
+  let transactionId =
     getTransactionId(row);
 
   const ledgerStatus =
@@ -306,16 +308,121 @@ export async function reconcileBookingLedgerRow(
   let bookeoBookingId =
     getBookeoBookingId(row);
 
-  if (
-    !checkoutId ||
-    !transactionId
-  ) {
+  if (!checkoutId) {
     return {
       ok: false,
       checkoutId,
       action: "SKIPPED",
       message:
-        "Ledger row is missing checkout or Authorize.Net transaction ID.",
+        "Ledger row is missing checkout ID.",
+    };
+  }
+
+  let recoveredAuthorizingTransaction =
+    false;
+
+  if (
+    ledgerStatus ===
+      BOOKING_STATES.AUTHORIZING &&
+    !transactionId
+  ) {
+    const invoiceNumber =
+      checkoutId.slice(
+        0,
+        20
+      );
+
+    const invoiceLookup =
+      await findSandboxUnsettledTransactionByInvoiceNumber(
+        invoiceNumber
+      );
+
+    if (!invoiceLookup.ok) {
+      return markManualReview({
+        checkoutId,
+        transactionId:
+          "UNKNOWN",
+        errorCode:
+          "RECONCILE_AUTHORIZING_LOOKUP_FAILED",
+        errorMessage:
+          "AUTH-ONLY result is uncertain and Authorize.Net could not be searched safely by invoice number.",
+        errorData: {
+          invoiceNumber,
+          message:
+            invoiceLookup.message,
+          uncertain:
+            invoiceLookup.uncertain,
+        },
+      });
+    }
+
+    if (
+      invoiceLookup.result ===
+      "AMBIGUOUS"
+    ) {
+      return markManualReview({
+        checkoutId,
+        transactionId:
+          "UNKNOWN",
+        errorCode:
+          "RECONCILE_AUTHORIZING_MULTIPLE_AUTHNET_MATCHES",
+        errorMessage:
+          "Multiple unsettled Authorize.Net transactions matched the checkout invoice number. Automatic recovery stopped.",
+        errorData: {
+          invoiceNumber,
+          matches:
+            invoiceLookup.matches,
+        },
+      });
+    }
+
+    if (
+      invoiceLookup.result ===
+      "NO_MATCH"
+    ) {
+      return markManualReview({
+        checkoutId,
+        transactionId:
+          "UNKNOWN",
+        errorCode:
+          "RECONCILE_AUTHORIZING_NO_AUTHNET_MATCH",
+        errorMessage:
+          "AUTH-ONLY result is uncertain and no unsettled Authorize.Net transaction matched the checkout invoice number. Automatic retry remains blocked.",
+        errorData: {
+          invoiceNumber,
+        },
+      });
+    }
+
+    transactionId =
+      invoiceLookup.transactionId;
+
+    recoveredAuthorizingTransaction =
+      true;
+
+    await updateBookingLedgerRecord({
+      checkoutId,
+      authorizeTransactionId:
+        transactionId,
+      errorCode:
+        "RECONCILE_AUTHORIZING_TRANSACTION_FOUND",
+      errorMessage:
+        "Recovered the Authorize.Net transaction ID from the checkout invoice number after an uncertain AUTH-ONLY result.",
+      errorData: {
+        invoiceNumber,
+        gatewayStatus:
+          invoiceLookup.transactionStatus,
+      },
+    });
+  }
+
+  if (!transactionId) {
+    return {
+      ok: false,
+      checkoutId,
+      action: "SKIPPED",
+      message:
+        "Ledger row is missing Authorize.Net transaction ID.",
     };
   }
 
@@ -344,6 +451,30 @@ export async function reconcileBookingLedgerRow(
       action: "NO_CHANGE",
       message:
         gatewayState.message,
+    };
+  }
+
+  if (
+    ledgerStatus ===
+      BOOKING_STATES.AUTHORIZING &&
+    gatewayState.status ===
+      VOIDED_STATUS
+  ) {
+    await updateBookingLedgerRecord({
+      checkoutId,
+      status:
+        BOOKING_STATES.VOIDED,
+      errorCode:
+        "RECONCILE_AUTHORIZING_CONFIRMED_VOID",
+      errorMessage:
+        "Authorize.Net confirmed the uncertain authorization is voided.",
+    });
+
+    return {
+      ok: true,
+      checkoutId,
+      action:
+        "MARKED_VOIDED",
     };
   }
 
@@ -617,6 +748,59 @@ export async function reconcileBookingLedgerRow(
       gatewayState.status ===
       AUTHORIZED_PENDING_CAPTURE
     ) {
+      if (
+        ledgerStatus ===
+          BOOKING_STATES.AUTHORIZING ||
+        recoveredAuthorizingTransaction
+      ) {
+        const voidResult =
+          await voidSandboxAuthorization(
+            transactionId
+          );
+
+        if (voidResult.ok) {
+          await updateBookingLedgerRecord({
+            checkoutId,
+            status:
+              BOOKING_STATES.VOIDED,
+            errorCode:
+              "RECONCILE_ORPHAN_AUTHORIZATION_VOIDED",
+            errorMessage:
+              "Recovered an uncertain AUTH-ONLY transaction, confirmed no Bookeo booking exists, and voided the authorization.",
+            errorData: {
+              gatewayStatus:
+                gatewayState.status,
+              authorizeTransactionId:
+                transactionId,
+            },
+          });
+
+          return {
+            ok: true,
+            checkoutId,
+            action:
+              "MARKED_VOIDED",
+          };
+        }
+
+        return markManualReview({
+          checkoutId,
+          transactionId,
+          errorCode:
+            "RECONCILE_ORPHAN_AUTHORIZATION_VOID_NOT_CONFIRMED",
+          errorMessage:
+            "Recovered an uncertain AUTH-ONLY transaction and confirmed no Bookeo booking exists, but the authorization void could not be confirmed.",
+          errorData: {
+            gatewayStatus:
+              gatewayState.status,
+            uncertain:
+              voidResult.uncertain,
+            message:
+              voidResult.message,
+          },
+        });
+      }
+
       /*
        * Do not create Bookeo and do not capture.
        * The synchronous flow owns the controlled
