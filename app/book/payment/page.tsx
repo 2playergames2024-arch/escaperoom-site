@@ -514,7 +514,7 @@ function PaymentPageContent() {
                   setCardNumber(event.target.value)
                 }
                 className="w-full rounded border-2 border-slate-300 px-4 py-2.5"
-                placeholder="4111111111111111"
+                placeholder="1234 5678 9012 3456"
               />
             </div>
 
@@ -539,7 +539,7 @@ function PaymentPageContent() {
                     )
                   }
                   className="w-full rounded border-2 border-slate-300 px-4 py-2.5"
-                  placeholder="12"
+                  placeholder="MM"
                 />
               </div>
 
@@ -563,7 +563,7 @@ function PaymentPageContent() {
                     )
                   }
                   className="w-full rounded border-2 border-slate-300 px-4 py-2.5"
-                  placeholder="28"
+                  placeholder="YY"
                 />
               </div>
 
@@ -621,6 +621,30 @@ function PaymentPageContent() {
             ← Change Room, Date, or Time
           </Link>
         </section>
+
+        {isPaying && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-4"
+            role="status"
+            aria-live="polite"
+            aria-busy="true"
+          >
+            <div className="w-full max-w-md rounded-2xl bg-white p-8 text-center shadow-2xl">
+              <div
+                className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-orange-500"
+                aria-hidden="true"
+              />
+
+              <h2 className="mt-5 text-2xl font-black">
+                Please do not leave this page
+              </h2>
+
+              <p className="mt-2 text-lg font-semibold text-slate-700">
+                Confirming your booking...
+              </p>
+            </div>
+          </div>
+        )}
       </main>
     </>
   );
