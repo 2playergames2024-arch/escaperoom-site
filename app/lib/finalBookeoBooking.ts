@@ -203,9 +203,20 @@ export async function createFinalBookeoBooking(
     }
 
     /*
-     * A 4xx response is an explicit Bookeo
-     * rejection. It is safe to treat this as
-     * "booking not created."
+     * A 4xx response does NOT prove that no booking
+     * exists. Bookeo may reject a repeated CREATE
+     * because the original booking already consumed
+     * the hold, or because the booking is not yet
+     * visible to lookup.
+     *
+     * Treat every 4xx as uncertain so the caller
+     * verifies Bookeo before any authorization is
+     * voided. The caller's lookup/recovery path will:
+     *   - capture if the booking is found;
+     *   - stop safely on lookup error/ambiguity;
+     *   - allow the one controlled second CREATE only
+     *     after confirmed NO_MATCH + valid hold;
+     *   - void only after the final confirmed NO_MATCH.
      */
     if (
       response.status >= 400 &&
@@ -213,14 +224,12 @@ export async function createFinalBookeoBooking(
     ) {
       return {
         ok: false,
-        reason: "REJECTED",
-        status:
-          response.status,
+        reason: "UNCERTAIN",
         message:
           typeof data?.message ===
             "string"
             ? data.message
-            : "Bookeo rejected the booking.",
+            : `Bookeo returned HTTP ${response.status}; booking existence must be verified before payment is voided.`,
         data,
       };
     }
