@@ -34,24 +34,24 @@ type BookeoBooking = {
 
 export type BookeoBookingLookupResult =
   | {
-      ok: true;
-      result: "FOUND";
-      bookingId: string;
-    }
+    ok: true;
+    result: "FOUND";
+    bookingId: string;
+  }
   | {
-      ok: true;
-      result: "NO_MATCH";
-    }
+    ok: true;
+    result: "NO_MATCH";
+  }
   | {
-      ok: true;
-      result: "AMBIGUOUS";
-      matches: number;
-    }
+    ok: true;
+    result: "AMBIGUOUS";
+    matches: number;
+  }
   | {
-      ok: false;
-      result: "ERROR";
-      message: string;
-    };
+    ok: false;
+    result: "ERROR";
+    message: string;
+  };
 
 function getBookeoApiKey(
   location: string
@@ -65,6 +65,13 @@ function getBookeoApiKey(
 export async function lookupFinalBookeoBooking(
   session: BookingSession
 ): Promise<BookeoBookingLookupResult> {
+  if (process.env.VERCEL_ENV === "preview") {
+    return {
+      ok: true,
+      result: "AMBIGUOUS",
+      matches: 2,
+    };
+  }
   const BOOKEO_API_KEY =
     getBookeoApiKey(
       session.location
@@ -125,12 +132,12 @@ export async function lookupFinalBookeoBooking(
       bookingPages.bookings.filter(
         (booking) =>
           booking.productId ===
-            session.productId &&
+          session.productId &&
           booking.eventId ===
-            session.eventId &&
+          session.eventId &&
           booking.canceled !== true &&
           booking.externalRef ===
-            session.checkoutId
+          session.checkoutId
       );
 
     if (matches.length === 0) {
