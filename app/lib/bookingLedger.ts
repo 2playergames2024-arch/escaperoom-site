@@ -156,3 +156,23 @@ export async function claimCheckoutForAuthorization(
 
   return rows[0] ?? null;
 }
+
+export async function markBookingCaptureComplete(
+  checkoutId: string
+) {
+  const sql = getSql();
+
+  const rows = await sql`
+    UPDATE booking_ledger
+    SET
+      status = ${BOOKING_STATES.COMPLETE},
+      error_code = NULL,
+      error_message = NULL,
+      error_data = NULL,
+      updated_at = NOW()
+    WHERE checkout_id = ${checkoutId}
+    RETURNING *
+  `;
+
+  return rows[0] ?? null;
+}

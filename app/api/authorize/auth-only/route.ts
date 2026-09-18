@@ -19,6 +19,9 @@ import {
   voidSandboxAuthorization,
 } from "@/app/lib/authorizeSandbox";
 import {
+  recoverFailedCapture,
+} from "@/app/lib/captureRecovery";
+import {
   createFinalBookeoBooking,
 } from "@/app/lib/finalBookeoBooking";
 import {
@@ -53,9 +56,7 @@ async function captureBookedCheckout({
    * STEP 23:
    * Bookeo is positively BOOKED.
    *
-   * Capture the existing Authorize.Net
-   * authorization. Never create another
-   * authorization here.
+   * Make the first prior-auth capture attempt.
    */
   const captureResult =
     await captureSandboxAuthorization(
@@ -87,12 +88,9 @@ async function captureBookedCheckout({
   }
 
   /*
-   * Whether Authorize.Net explicitly rejected
-   * capture or the result is uncertain, the
-   * Bookeo booking already exists.
-   *
-   * Never void/delete the Bookeo booking here.
-   * Step 24 will retry/reconcile capture.
+   * STEP 24:
+   * The first capture did not produce a confirmed
+   * success. Persist CAPTURE_FAILED first.
    */
   await updateBookingLedgerRecord({
     checkoutId,
@@ -119,6 +117,44 @@ async function captureBookedCheckout({
     },
   });
 
+  /*
+   * Never retry capture blindly.
+   *
+   * recoverFailedCapture() asks Authorize.Net for
+   * the real transaction state before every retry.
+   */
+  const recoveryResult =
+    await recoverFailedCapture({
+      checkoutId,
+      transactionId,
+      bookeoBookingId,
+      amount,
+    });
+
+  if (recoveryResult.ok) {
+    return NextResponse.json({
+      ...responseData,
+
+      authorized: true,
+      booked: true,
+      captured: true,
+      complete: true,
+      captureRecovered:
+        true,
+
+      captureRecoveredBy:
+        recoveryResult.recoveredBy,
+
+      captureRetryAttempts:
+        recoveryResult.retryAttempts,
+
+      transactionId:
+        recoveryResult.transactionId,
+
+      bookeoBookingId,
+    });
+  }
+
   return NextResponse.json(
     {
       ...responseData,
@@ -132,8 +168,17 @@ async function captureBookedCheckout({
       transactionId,
       bookeoBookingId,
 
+      captureRetryAttempts:
+        recoveryResult.retryAttempts,
+
+      authorizeStatus:
+        recoveryResult.finalStatus,
+
+      staffAlertSent:
+        recoveryResult.alertSent,
+
       error:
-        "The Bookeo booking was created, but payment capture requires recovery.",
+        "The Bookeo booking was created, but payment capture recovery was exhausted.",
     },
     {
       status: 502,

@@ -261,3 +261,139 @@ export async function captureSandboxAuthorization(
     };
   }
 }
+
+export type SandboxTransactionStateResult =
+  | {
+      ok: true;
+      transactionId: string;
+      status: string;
+      authorizedAmount: number | null;
+      settledAmount: number | null;
+    }
+  | {
+      ok: false;
+      message: string;
+      uncertain: boolean;
+    };
+
+export async function getSandboxTransactionState(
+  transactionId: string
+): Promise<SandboxTransactionStateResult> {
+  if (
+    !AUTHORIZE_SANDBOX_LOGIN_ID ||
+    !AUTHORIZE_SANDBOX_TRANSACTION_KEY
+  ) {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net sandbox credentials are not configured.",
+      uncertain: false,
+    };
+  }
+
+  try {
+    const response =
+      await fetch(
+        AUTHORIZE_SANDBOX_URL,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            getTransactionDetailsRequest: {
+              merchantAuthentication: {
+                name:
+                  AUTHORIZE_SANDBOX_LOGIN_ID,
+                transactionKey:
+                  AUTHORIZE_SANDBOX_TRANSACTION_KEY,
+              },
+              transId:
+                transactionId,
+            },
+          }),
+          signal:
+            AbortSignal.timeout(
+              15_000
+            ),
+        }
+      );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        message:
+          "Authorize.Net did not return transaction details.",
+        uncertain: true,
+      };
+    }
+
+    const data =
+      await response.json();
+
+    const transaction =
+      data?.transaction;
+
+    const status =
+      String(
+        transaction
+          ?.transactionStatus || ""
+      );
+
+    const returnedTransactionId =
+      String(
+        transaction?.transId ||
+        transactionId
+      );
+
+    if (!transaction || !status) {
+      const message =
+        String(
+          data
+            ?.messages?.message?.[0]
+            ?.text ||
+          "Authorize.Net did not return a usable transaction status."
+        );
+
+      return {
+        ok: false,
+        message,
+        uncertain: false,
+      };
+    }
+
+    const authAmount =
+      Number(
+        transaction?.authAmount
+      );
+
+    const settleAmount =
+      Number(
+        transaction?.settleAmount
+      );
+
+    return {
+      ok: true,
+      transactionId:
+        returnedTransactionId,
+      status,
+      authorizedAmount:
+        Number.isFinite(authAmount)
+          ? authAmount
+          : null,
+      settledAmount:
+        Number.isFinite(settleAmount)
+          ? settleAmount
+          : null,
+    };
+  } catch {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net transaction status could not be confirmed.",
+      uncertain: true,
+    };
+  }
+}
