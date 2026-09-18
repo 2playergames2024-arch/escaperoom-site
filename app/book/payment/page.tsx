@@ -596,6 +596,9 @@ function PaymentPageContent() {
       <Script
         src="https://jstest.authorize.net/v1/Accept.js"
         strategy="afterInteractive"
+        onReady={() => {
+          setAcceptReady(true);
+        }}
         onLoad={() => {
           setAcceptReady(true);
         }}
