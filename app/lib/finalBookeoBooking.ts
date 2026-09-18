@@ -8,6 +8,9 @@ import {
 import {
   type BookingSession,
 } from "@/app/lib/booking";
+import {
+  logBookingEvent,
+} from "@/app/lib/bookingLog";
 
 const BOOKEO_KOP_API_KEY =
   process.env.BOOKEO_KOP_API_KEY;
@@ -92,6 +95,19 @@ export async function createFinalBookeoBooking(
     )}` +
     `&notifyUsers=false` +
     `&notifyCustomer=false`;
+
+  logBookingEvent(
+    "bookeo.final_create_started",
+    {
+      sessionId:
+        session.sessionId,
+      checkoutId:
+        session.checkoutId,
+      holdId:
+        session.holdId,
+      authorizeTransactionId,
+    }
+  );
 
   try {
     const response =

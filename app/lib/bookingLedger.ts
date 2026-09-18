@@ -1,6 +1,7 @@
 import "server-only";
 import { neon } from "@neondatabase/serverless";
 import { BOOKING_STATES } from "./bookingState";
+import { logBookingEvent } from "./bookingLog";
 
 function getSql() {
   const databaseUrl = process.env.DATABASE_URL;
@@ -52,6 +53,18 @@ export async function createBookingLedgerRecord({
     RETURNING *
   `;
 
+  logBookingEvent(
+    "ledger.created",
+    {
+      checkoutId,
+      holdId:
+        holdId ?? null,
+      nextStatus:
+        status,
+      status,
+    }
+  );
+
   return rows[0];
 }
 
@@ -90,6 +103,11 @@ export async function updateBookingLedgerRecord({
   errorData?: unknown;
 }) {
   const sql = getSql();
+
+  const before =
+    await getBookingLedgerRecord(
+      checkoutId
+    );
 
   const rows = await sql`
     UPDATE booking_ledger
@@ -136,7 +154,42 @@ export async function updateBookingLedgerRecord({
     RETURNING *
   `;
 
-  return rows[0] ?? null;
+  const updated =
+    rows[0] ?? null;
+
+  logBookingEvent(
+    "ledger.updated",
+    {
+      checkoutId,
+      holdId:
+        holdId ??
+        updated?.hold_id ??
+        null,
+      authorizeTransactionId:
+        authorizeTransactionId ??
+        updated?.authorize_transaction_id ??
+        null,
+      bookeoBookingId:
+        bookeoBookingId ??
+        updated?.bookeo_booking_id ??
+        null,
+      previousStatus:
+        before?.status ?? null,
+      nextStatus:
+        updated?.status ?? status ?? null,
+      status:
+        updated?.status ?? status ?? null,
+      errorCode:
+        errorCode ??
+        updated?.error_code ??
+        null,
+    },
+    updated
+      ? "info"
+      : "warn"
+  );
+
+  return updated;
 }
 export async function claimCheckoutForAuthorization(
   checkoutId: string
@@ -154,13 +207,41 @@ export async function claimCheckoutForAuthorization(
     RETURNING *
   `;
 
-  return rows[0] ?? null;
+  const claimed =
+    rows[0] ?? null;
+
+  logBookingEvent(
+    claimed
+      ? "authorization.claimed"
+      : "authorization.claim_rejected",
+    {
+      checkoutId,
+      previousStatus:
+        BOOKING_STATES.HOLD_CREATED,
+      nextStatus:
+        claimed
+          ? BOOKING_STATES.AUTHORIZING
+          : null,
+      status:
+        claimed?.status ?? null,
+    },
+    claimed
+      ? "info"
+      : "warn"
+  );
+
+  return claimed;
 }
 
 export async function markBookingCaptureComplete(
   checkoutId: string
 ) {
   const sql = getSql();
+
+  const before =
+    await getBookingLedgerRecord(
+      checkoutId
+    );
 
   const rows = await sql`
     UPDATE booking_ledger
@@ -174,7 +255,34 @@ export async function markBookingCaptureComplete(
     RETURNING *
   `;
 
-  return rows[0] ?? null;
+  const completed =
+    rows[0] ?? null;
+
+  logBookingEvent(
+    "booking.completed",
+    {
+      checkoutId,
+      previousStatus:
+        before?.status ?? null,
+      nextStatus:
+        completed?.status ??
+        BOOKING_STATES.COMPLETE,
+      status:
+        completed?.status ??
+        BOOKING_STATES.COMPLETE,
+      authorizeTransactionId:
+        completed?.authorize_transaction_id ??
+        null,
+      bookeoBookingId:
+        completed?.bookeo_booking_id ??
+        null,
+    },
+    completed
+      ? "info"
+      : "warn"
+  );
+
+  return completed;
 }
 
 export async function getBookingLedgerRecordByAuthorizeTransactionId(

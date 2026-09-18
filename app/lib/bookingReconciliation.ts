@@ -22,6 +22,9 @@ import {
 import {
   recoverFailedCapture,
 } from "@/app/lib/captureRecovery";
+import {
+  logBookingEvent,
+} from "@/app/lib/bookingLog";
 
 const redis = Redis.fromEnv();
 
@@ -276,6 +279,21 @@ export async function reconcileBookingLedgerRow(
 ): Promise<BookingReconciliationResult> {
   const checkoutId =
     getCheckoutId(row);
+
+  logBookingEvent(
+    "reconciliation.started",
+    {
+      checkoutId,
+      authorizeTransactionId:
+        getTransactionId(row) || null,
+      bookeoBookingId:
+        getBookeoBookingId(row) || null,
+      status:
+        String(
+          row.status || ""
+        ) || null,
+    }
+  );
 
   const transactionId =
     getTransactionId(row);

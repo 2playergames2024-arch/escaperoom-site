@@ -11,6 +11,9 @@ import {
 import {
   reconcileBookingLedgerRow,
 } from "@/app/lib/bookingReconciliation";
+import {
+  logBookingEvent,
+} from "@/app/lib/bookingLog";
 
 const redis = Redis.fromEnv();
 
@@ -176,6 +179,23 @@ export async function GET(
       }
     }
   }
+
+  logBookingEvent(
+    "reconciliation.run_complete",
+    {
+      result: "complete",
+      metadata: {
+        checked,
+        locked,
+        repaired,
+        manualReview,
+        unchanged,
+      },
+    },
+    manualReview > 0
+      ? "warn"
+      : "info"
+  );
 
   return NextResponse.json({
     ok: true,

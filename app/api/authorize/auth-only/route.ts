@@ -27,6 +27,9 @@ import {
 import {
   lookupFinalBookeoBooking,
 } from "@/app/lib/bookeoBookingLookup";
+import {
+  logBookingEvent,
+} from "@/app/lib/bookingLog";
 
 const redis = Redis.fromEnv();
 
@@ -58,6 +61,18 @@ async function captureBookedCheckout({
    *
    * Make the first prior-auth capture attempt.
    */
+  logBookingEvent(
+    "capture.started",
+    {
+      checkoutId,
+      authorizeTransactionId:
+        transactionId,
+      bookeoBookingId,
+      previousStatus:
+        BOOKING_STATES.BOOKED,
+    }
+  );
+
   const captureResult =
     await captureSandboxAuthorization(
       transactionId,
@@ -65,6 +80,17 @@ async function captureBookedCheckout({
     );
 
   if (captureResult.ok) {
+    logBookingEvent(
+      "capture.succeeded",
+      {
+        checkoutId,
+        authorizeTransactionId:
+          captureResult.transactionId,
+        bookeoBookingId,
+        result: "captured",
+      }
+    );
+
     await updateBookingLedgerRecord({
       checkoutId,
 
@@ -92,6 +118,27 @@ async function captureBookedCheckout({
    * The first capture did not produce a confirmed
    * success. Persist CAPTURE_FAILED first.
    */
+  logBookingEvent(
+    "capture.failed",
+    {
+      checkoutId,
+      authorizeTransactionId:
+        transactionId,
+      bookeoBookingId,
+      result:
+        captureResult.uncertain
+          ? "uncertain"
+          : "rejected",
+      errorCode:
+        captureResult.uncertain
+          ? "CAPTURE_UNCERTAIN"
+          : "CAPTURE_REJECTED",
+    },
+    captureResult.uncertain
+      ? "warn"
+      : "error"
+  );
+
   await updateBookingLedgerRecord({
     checkoutId,
 
@@ -132,6 +179,20 @@ async function captureBookedCheckout({
     });
 
   if (recoveryResult.ok) {
+    logBookingEvent(
+      "capture.recovered",
+      {
+        checkoutId,
+        authorizeTransactionId:
+          recoveryResult.transactionId,
+        bookeoBookingId,
+        result:
+          recoveryResult.recoveredBy,
+        attempt:
+          recoveryResult.retryAttempts,
+      }
+    );
+
     return NextResponse.json({
       ...responseData,
 
@@ -154,6 +215,23 @@ async function captureBookedCheckout({
       bookeoBookingId,
     });
   }
+
+  logBookingEvent(
+    "capture.recovery_exhausted",
+    {
+      checkoutId,
+      authorizeTransactionId:
+        transactionId,
+      bookeoBookingId,
+      result:
+        recoveryResult.finalStatus,
+      attempt:
+        recoveryResult.retryAttempts,
+      errorCode:
+        "CAPTURE_RECOVERY_EXHAUSTED",
+    },
+    "error"
+  );
 
   return NextResponse.json(
     {
@@ -253,6 +331,17 @@ export async function POST(
         `booking-session:${sessionId}`
       );
 
+    logBookingEvent(
+      "payment.request_received",
+      {
+        sessionId,
+        checkoutId:
+          session?.checkoutId ?? null,
+        holdId:
+          session?.holdId ?? null,
+      }
+    );
+
     if (!session) {
       return NextResponse.json(
         {
@@ -303,6 +392,22 @@ export async function POST(
 
     session =
       preAuthHoldResult.session;
+
+    logBookingEvent(
+      "hold.pre_auth_validated",
+      {
+        sessionId:
+          session.sessionId,
+        checkoutId:
+          session.checkoutId,
+        holdId:
+          session.holdId,
+        result:
+          preAuthHoldResult.replaced
+            ? "replaced"
+            : "valid",
+      }
+    );
 
     /*
      * STEP 17:
@@ -397,6 +502,20 @@ export async function POST(
       },
     };
 
+    logBookingEvent(
+      "authorization.started",
+      {
+        sessionId:
+          session.sessionId,
+        checkoutId:
+          session.checkoutId,
+        holdId:
+          session.holdId,
+        previousStatus:
+          BOOKING_STATES.AUTHORIZING,
+      }
+    );
+
     const authorizeResponse =
       await fetch(
         AUTHORIZE_SANDBOX_URL,
@@ -478,6 +597,21 @@ export async function POST(
       transactionId &&
       transactionId !== "0"
     ) {
+      logBookingEvent(
+        "authorization.approved",
+        {
+          sessionId:
+            session.sessionId,
+          checkoutId:
+            session.checkoutId,
+          holdId:
+            session.holdId,
+          authorizeTransactionId:
+            transactionId,
+          result: "approved",
+        }
+      );
+
       await updateBookingLedgerRecord({
         checkoutId:
           session.checkoutId,
@@ -616,6 +750,24 @@ export async function POST(
        */
       session =
         postAuthHoldResult.session;
+
+      logBookingEvent(
+        "hold.post_auth_validated",
+        {
+          sessionId:
+            session.sessionId,
+          checkoutId:
+            session.checkoutId,
+          holdId:
+            session.holdId,
+          authorizeTransactionId:
+            transactionId,
+          result:
+            postAuthHoldResult.replaced
+              ? "replaced"
+              : "valid",
+        }
+      );
 
       /*
        * STEP 20:
@@ -1397,6 +1549,25 @@ export async function POST(
     responseCode === "2" ||
     responseCode === "3"
   ) {
+    logBookingEvent(
+      "authorization.declined",
+      {
+        sessionId:
+          session.sessionId,
+        checkoutId:
+          session.checkoutId,
+        holdId:
+          session.holdId,
+        authorizeTransactionId:
+          transactionId || null,
+        result:
+          responseCode,
+        errorCode:
+          `AUTHORIZE_${responseCode}`,
+      },
+      "warn"
+    );
+
     await updateBookingLedgerRecord({
       checkoutId:
         session.checkoutId,

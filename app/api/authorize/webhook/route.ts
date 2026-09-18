@@ -15,6 +15,9 @@ import {
 import {
   BOOKING_STATES,
 } from "@/app/lib/bookingState";
+import {
+  logBookingEvent,
+} from "@/app/lib/bookingLog";
 
 const HANDLED_PAYMENT_EVENTS =
   new Set([
