@@ -1637,7 +1637,7 @@ export async function POST(
         checkoutId:
           session.checkoutId,
         status:
-          BOOKING_STATES.FAILED,
+          BOOKING_STATES.HOLD_CREATED,
         errorCode:
           `AUTHORIZE_${responseCode}`,
         errorMessage:
@@ -1645,6 +1645,7 @@ export async function POST(
           "Authorize.Net declined the authorization.",
         errorData: {
           responseCode,
+          retryable: true,
         },
       });
 

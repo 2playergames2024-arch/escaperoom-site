@@ -338,14 +338,23 @@ function PaymentPageContent() {
       if (
         authorizationData.declined
       ) {
+        /*
+         * A definite decline means Authorize.Net did
+         * not approve an authorization. It is safe to
+         * let the customer correct the card details and
+         * submit again on this same booking session.
+         */
+        paymentAttemptRef.current = false;
+        setPaymentLocked(false);
+
         setPaymentNotice({
           title:
             "Payment Was Not Approved",
           message:
             authorizationData.error ||
-            "Your card was not approved.",
+            "Your card was declined.",
           instruction:
-            "Close this message, then use Change Room, Date, or Time below to start a new payment attempt.",
+            "Close this message, check your card information, or try another card.",
         });
 
         return;
@@ -457,6 +466,13 @@ function PaymentPageContent() {
         ? "Cherry Hill"
         : "Escape Room Mystery";
 
+  const locationDisplay =
+    session.location === "king-of-prussia"
+      ? "King of Prussia, PA"
+      : session.location === "cherry-hill"
+        ? "Cherry Hill, New Jersey"
+        : "Escape Room Mystery";
+
   const formattedDate =
     new Date(
       `${session.date}T12:00:00`
@@ -515,7 +531,7 @@ function PaymentPageContent() {
             <div className="grid gap-2 text-base sm:text-lg">
               <p>
                 <strong>Location:</strong>{" "}
-                {locationName}
+                {locationDisplay}
               </p>
 
               <p>
@@ -605,7 +621,11 @@ function PaymentPageContent() {
             Review &amp; Pay
           </h1>
 
-          <div className="mt-4 grid gap-1.5 text-base font-bold sm:text-lg">
+          <p className="mt-1 text-base font-black text-slate-700 sm:text-lg">
+            {locationDisplay}
+          </p>
+
+          <div className="mt-3 grid gap-1.5 text-base font-bold sm:text-lg">
             <p>
               Room: {session.roomName}
             </p>

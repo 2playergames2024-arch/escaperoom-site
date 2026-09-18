@@ -22,6 +22,7 @@ const ALLOWED_TRANSITIONS: Record<
   ],
 
   AUTHORIZING: [
+    "HOLD_CREATED",
     "AUTHORIZED",
     "FAILED",
   ],
