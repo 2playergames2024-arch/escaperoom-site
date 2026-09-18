@@ -59,17 +59,10 @@ async function captureBookedCheckout({
    * Make the first prior-auth capture attempt.
    */
   const captureResult =
-    process.env.VERCEL_ENV === "preview"
-      ? {
-          ok: false as const,
-          message:
-            "Preview Step 24 test: simulate initial capture failure before sending capture.",
-          uncertain: true,
-        }
-      : await captureSandboxAuthorization(
-          transactionId,
-          amount
-        );
+    await captureSandboxAuthorization(
+      transactionId,
+      amount
+    );
 
   if (captureResult.ok) {
     await updateBookingLedgerRecord({
