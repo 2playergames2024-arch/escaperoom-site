@@ -36,6 +36,16 @@ type AcceptResponse = {
   opaqueData?: AcceptOpaqueData;
 };
 
+type PaymentNotice = {
+  title: string;
+  message: string;
+  instruction: string;
+};
+
+type BookingConfirmation = {
+  bookeoBookingId: string;
+};
+
 declare global {
   interface Window {
     Accept?: {
@@ -78,6 +88,15 @@ function PaymentPageContent() {
 
   const [error, setError] =
     useState("");
+
+  const [paymentNotice, setPaymentNotice] =
+    useState<PaymentNotice | null>(null);
+
+  const [paymentLocked, setPaymentLocked] =
+    useState(false);
+
+  const [confirmation, setConfirmation] =
+    useState<BookingConfirmation | null>(null);
 
   const [cardNumber, setCardNumber] =
     useState("");
@@ -170,6 +189,7 @@ function PaymentPageContent() {
     paymentAttemptRef.current = true;
     setIsPaying(true);
     setError("");
+    setPaymentNotice(null);
 
     let authorizationStarted =
       false;
@@ -252,6 +272,8 @@ function PaymentPageContent() {
       );
 
       authorizationStarted = true;
+      setPaymentLocked(true);
+
       const authorizationResponse =
         await fetch(
           "/api/authorize/auth-only",
@@ -272,36 +294,108 @@ function PaymentPageContent() {
         await authorizationResponse.json();
 
       if (
-        !authorizationResponse.ok ||
-        !authorizationData.authorized
+        authorizationResponse.ok &&
+        authorizationData.authorized &&
+        authorizationData.booked &&
+        authorizationData.captured &&
+        authorizationData.complete &&
+        authorizationData.bookeoBookingId
       ) {
-        throw new Error(
-          authorizationData.error ||
-          "The card authorization was not approved."
+        trackClarityEvent(
+          "payment_authorized"
         );
+
+        trackClarityEvent(
+          "booking_completed"
+        );
+
+        setConfirmation({
+          bookeoBookingId:
+            String(
+              authorizationData.bookeoBookingId
+            ),
+        });
+
+        return;
       }
 
-      trackClarityEvent(
-        "payment_authorized"
-      );
+      if (
+        authorizationData.unavailable
+      ) {
+        setPaymentNotice({
+          title:
+            "That Time Is No Longer Available",
+          message:
+            authorizationData.error ||
+            "Unfortunately, those seats became unavailable before your booking could be completed.",
+          instruction:
+            "Close this message, then choose Change Room, Date, or Time below to select another available time.",
+        });
 
-      setError(
-        authorizationData.booked
-          ? `Sandbox authorization approved. Bookeo booking created: ${authorizationData.bookeoBookingId}. Transaction ID: ${authorizationData.transactionId}`
-          : authorizationData.holdReplaced
-            ? `Sandbox authorization approved. Bookeo hold was replaced and revalidated. Transaction ID: ${authorizationData.transactionId}`
-            : `Sandbox authorization approved. Bookeo hold revalidated after authorization. Transaction ID: ${authorizationData.transactionId}`
-      );
+        return;
+      }
+
+      if (
+        authorizationData.declined
+      ) {
+        setPaymentNotice({
+          title:
+            "Payment Was Not Approved",
+          message:
+            authorizationData.error ||
+            "Your card was not approved.",
+          instruction:
+            "Close this message, then use Change Room, Date, or Time below to start a new payment attempt.",
+        });
+
+        return;
+      }
+
+      if (
+        authorizationData.recoveryRequired ||
+        authorizationData.uncertain
+      ) {
+        setPaymentNotice({
+          title:
+            "We're Confirming Your Booking",
+          message:
+            "We received your payment request, but the final booking status could not be confirmed immediately.",
+          instruction:
+            "Please do not submit another payment. Close this message and contact us if you need assistance.",
+        });
+
+        return;
+      }
+
+      setPaymentNotice({
+        title:
+          "Booking Could Not Be Completed",
+        message:
+          authorizationData.error ||
+          "We could not complete your booking.",
+        instruction:
+          "Close this message, then use Change Room, Date, or Time below to start again.",
+      });
     } catch (err) {
       if (!authorizationStarted) {
         paymentAttemptRef.current = false;
+        setPaymentLocked(false);
       }
 
-      setError(
-        err instanceof Error
-          ? err.message
-          : "We couldn't tokenize the card. Please try again."
-      );
+      setPaymentNotice({
+        title: authorizationStarted
+          ? "Booking Could Not Be Confirmed"
+          : "Card Information Could Not Be Submitted",
+        message:
+          err instanceof Error
+            ? err.message
+            : authorizationStarted
+              ? "We could not confirm the final booking status."
+              : "We could not securely submit the card information.",
+        instruction: authorizationStarted
+          ? "Please do not submit another payment. Close this message and contact us if you need assistance."
+          : "Check the card information and try again.",
+      });
     } finally {
       setIsPaying(false);
     }
@@ -356,6 +450,13 @@ function PaymentPageContent() {
   const bookingHref =
     locationConfig?.bookHref ?? "/";
 
+  const locationName =
+    session.location === "king-of-prussia"
+      ? "King of Prussia"
+      : session.location === "cherry-hill"
+        ? "Cherry Hill"
+        : "Escape Room Mystery";
+
   const formattedDate =
     new Date(
       `${session.date}T12:00:00`
@@ -383,6 +484,97 @@ function PaymentPageContent() {
   const finalTotal =
     Number(session.total);
 
+  if (confirmation) {
+    return (
+      <main className="min-h-screen bg-white px-4 py-8 text-slate-950 sm:px-6">
+        <section className="mx-auto max-w-2xl rounded-[18px] border-2 border-slate-950 p-6 shadow-lg sm:p-8">
+          <div className="text-center">
+            <div
+              className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-orange-500 text-3xl font-black text-white"
+              aria-hidden="true"
+            >
+              ✓
+            </div>
+
+            <h1 className="mt-4 text-3xl font-black sm:text-4xl">
+              Booking Confirmed
+            </h1>
+
+            <p className="mt-2 text-lg font-semibold">
+              Thank you for your purchase.
+            </p>
+
+            <p className="mt-2 text-base text-slate-700 sm:text-lg">
+              Your reservation for{" "}
+              <strong>{session.roomName}</strong>{" "}
+              is confirmed.
+            </p>
+          </div>
+
+          <div className="mt-6 rounded-xl border-2 border-slate-200 p-5">
+            <div className="grid gap-2 text-base sm:text-lg">
+              <p>
+                <strong>Location:</strong>{" "}
+                {locationName}
+              </p>
+
+              <p>
+                <strong>Date:</strong>{" "}
+                {formattedDate}
+              </p>
+
+              <p>
+                <strong>Time:</strong>{" "}
+                {session.time}
+              </p>
+
+              <p>
+                <strong>Players:</strong>{" "}
+                {session.players}
+              </p>
+
+              <p>
+                <strong>Total Paid:</strong>{" "}
+                ${finalTotal.toFixed(2)}
+              </p>
+
+              <p>
+                <strong>
+                  Confirmation Number:
+                </strong>{" "}
+                {confirmation.bookeoBookingId}
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-xl border-2 border-orange-500 bg-orange-50 p-5">
+            <p className="font-bold">
+              A confirmation email should arrive shortly with your booking details.
+            </p>
+
+            <p className="mt-2">
+              If you do not see it within a few minutes, please check your spam or junk folder.
+            </p>
+          </div>
+
+          <Link
+            href={bookingHref}
+            className="mt-6 block w-full rounded bg-orange-500 px-6 py-3.5 text-center font-black uppercase text-white hover:bg-orange-600"
+          >
+            Return to {locationName} Booking
+          </Link>
+
+          <Link
+            href="/"
+            className="mt-3 block text-center text-sm font-black uppercase text-orange-500"
+          >
+            Return to Home
+          </Link>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <>
       <Script
@@ -393,9 +585,14 @@ function PaymentPageContent() {
         }}
         onError={() => {
           setAcceptReady(false);
-          setError(
-            "Authorize.Net secure payment library failed to load."
-          );
+          setPaymentNotice({
+            title:
+              "Secure Payment Could Not Load",
+            message:
+              "The secure payment system did not load correctly.",
+            instruction:
+              "Close this message, refresh the page, and try again.",
+          });
         }}
       />
       <main className="min-h-screen bg-white px-4 py-6 text-slate-950 sm:px-6 lg:py-4">
@@ -591,27 +788,23 @@ function PaymentPageContent() {
             </div>
           </div>
 
-          {error && (
-            <div
-              role="alert"
-              aria-live="assertive"
-              className="mt-4 rounded border border-red-500 bg-red-50 p-3 text-sm font-bold text-red-700"
-            >
-              {error}
-            </div>
-          )}
-
           <button
             type="button"
             onClick={handlePayNow}
-            disabled={isPaying || !acceptReady}
+            disabled={
+              isPaying ||
+              !acceptReady ||
+              paymentLocked
+            }
             className="mt-4 w-full rounded bg-orange-500 px-8 py-3.5 font-black uppercase text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-slate-400"
           >
             {isPaying
-              ? "Creating Secure Token..."
+              ? "Confirming Booking..."
               : !acceptReady
                 ? "Loading Secure Payment..."
-                : `Pay $${finalTotal.toFixed(2)} & Complete Booking`}
+                : paymentLocked
+                  ? "Payment Attempt Complete"
+                  : `Pay $${finalTotal.toFixed(2)} & Complete Booking`}
           </button>
 
           <Link
@@ -621,6 +814,46 @@ function PaymentPageContent() {
             ← Change Room, Date, or Time
           </Link>
         </section>
+
+        {paymentNotice && !isPaying && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="payment-notice-title"
+            aria-describedby="payment-notice-message"
+          >
+            <div className="w-full max-w-md rounded-2xl bg-white p-6 text-center shadow-2xl sm:p-8">
+              <h2
+                id="payment-notice-title"
+                className="text-2xl font-black"
+              >
+                {paymentNotice.title}
+              </h2>
+
+              <p
+                id="payment-notice-message"
+                className="mt-3 text-base font-semibold text-slate-700"
+              >
+                {paymentNotice.message}
+              </p>
+
+              <p className="mt-3 text-sm text-slate-600">
+                {paymentNotice.instruction}
+              </p>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setPaymentNotice(null)
+                }
+                className="mt-6 w-full rounded bg-orange-500 px-6 py-3 font-black uppercase text-white hover:bg-orange-600"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        )}
 
         {isPaying && (
           <div
