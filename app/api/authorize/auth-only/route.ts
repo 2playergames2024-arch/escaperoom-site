@@ -498,10 +498,6 @@ export async function POST(
                 opaqueData.dataValue,
             },
           },
-
-          billTo: {
-            zip: "46282",
-          },
         },
       },
     };
