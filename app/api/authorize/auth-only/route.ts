@@ -490,14 +490,6 @@ export async function POST(
           amount:
             amount.toFixed(2),
 
-          order: {
-            invoiceNumber:
-              session.checkoutId.slice(
-                0,
-                20
-              ),
-          },
-
           payment: {
             opaqueData: {
               dataDescriptor:
@@ -505,6 +497,14 @@ export async function POST(
               dataValue:
                 opaqueData.dataValue,
             },
+          },
+
+          order: {
+            invoiceNumber:
+              session.checkoutId.slice(
+                0,
+                20
+              ),
           },
         },
       },
