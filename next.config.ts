@@ -1,32 +1,32 @@
 import type { NextConfig } from "next";
 
-const requiredProductionEnv = [
+const requiredServerEnv = [
   "BOOKEO_KOP_API_KEY",
   "BOOKEO_CH_API_KEY",
   "BOOKEO_SECRET_KEY",
-  "AUTHORIZE_LOGIN_ID",
-  "AUTHORIZE_TRANSACTION_KEY",
-  "AUTHORIZE_SIGNATURE_KEY",
   "AUTHORIZE_ENVIRONMENT",
   "SITE_URL",
   "RESEND_API_KEY",
   "ADMIN_RECOVERY_SECRET",
   "UPSTASH_REDIS_REST_URL",
   "UPSTASH_REDIS_REST_TOKEN",
+  "DATABASE_URL",
+  "CRON_SECRET",
 ] as const;
 
-if (process.env.NODE_ENV === "production") {
-  const missing = requiredProductionEnv.filter(
-    (name) => !process.env[name]?.trim()
-  );
-
-  if (missing.length > 0) {
-    throw new Error(
-      `Missing required production environment variables: ${missing.join(
-        ", "
-      )}`
+/*
+ * Validate deployment secrets/configuration on Vercel builds.
+ *
+ * `next build` sets NODE_ENV=production even on Brian's local
+ * computer, so NODE_ENV alone would incorrectly require every
+ * Vercel-only Production/Preview secret during a local build.
+ */
+if (process.env.VERCEL === "1") {
+  const missingCommon =
+    requiredServerEnv.filter(
+      (name) =>
+        !process.env[name]?.trim()
     );
-  }
 
   const authorizeEnvironment =
     process.env.AUTHORIZE_ENVIRONMENT;
@@ -37,6 +37,56 @@ if (process.env.NODE_ENV === "production") {
   ) {
     throw new Error(
       "AUTHORIZE_ENVIRONMENT must be either production or sandbox."
+    );
+  }
+
+  const requiredAuthorizeEnv =
+    authorizeEnvironment === "production"
+      ? [
+          "AUTHORIZE_LOGIN_ID",
+          "AUTHORIZE_TRANSACTION_KEY",
+          "AUTHORIZE_SIGNATURE_KEY",
+          "NEXT_PUBLIC_AUTHORIZE_LOGIN_ID",
+          "NEXT_PUBLIC_AUTHORIZE_CLIENT_KEY",
+        ]
+      : [
+          "AUTHORIZE_SANDBOX_LOGIN_ID",
+          "AUTHORIZE_SANDBOX_TRANSACTION_KEY",
+          "AUTHORIZE_SANDBOX_SIGNATURE_KEY",
+          "NEXT_PUBLIC_AUTHORIZE_SANDBOX_LOGIN_ID",
+          "NEXT_PUBLIC_AUTHORIZE_SANDBOX_CLIENT_KEY",
+        ];
+
+  const missingAuthorize =
+    requiredAuthorizeEnv.filter(
+      (name) =>
+        !process.env[name]?.trim()
+    );
+
+  const missing = [
+    ...missingCommon,
+    ...missingAuthorize,
+  ];
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing required production-build environment variables: ${missing.join(
+        ", "
+      )}`
+    );
+  }
+
+  const publicAuthorizeEnvironment =
+    process.env
+      .NEXT_PUBLIC_AUTHORIZE_ENVIRONMENT;
+
+  if (
+    publicAuthorizeEnvironment &&
+    publicAuthorizeEnvironment !==
+      authorizeEnvironment
+  ) {
+    throw new Error(
+      "NEXT_PUBLIC_AUTHORIZE_ENVIRONMENT must match AUTHORIZE_ENVIRONMENT when it is set."
     );
   }
 
@@ -116,11 +166,11 @@ const securityHeaders = [
     key: "Content-Security-Policy",
     value: [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' https://bookeo.com https://*.bookeo.com https://www.clarity.ms https://*.clarity.ms https://www.googletagmanager.com https://connect.facebook.net https://jstest.authorize.net",
+      "script-src 'self' 'unsafe-inline' https://bookeo.com https://*.bookeo.com https://www.clarity.ms https://*.clarity.ms https://www.googletagmanager.com https://connect.facebook.net https://jstest.authorize.net https://js.authorize.net",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
       "font-src 'self' data:",
-      "connect-src 'self' https://bookeo.com https://*.bookeo.com https://*.clarity.ms https://c.bing.com https://*.google-analytics.com https://*.analytics.google.com https://www.googletagmanager.com https://*.g.doubleclick.net https://*.google.com https://pagead2.googlesyndication.com https://www.facebook.com https://jstest.authorize.net https://apitest.authorize.net",
+      "connect-src 'self' https://bookeo.com https://*.bookeo.com https://*.clarity.ms https://c.bing.com https://*.google-analytics.com https://*.analytics.google.com https://www.googletagmanager.com https://*.g.doubleclick.net https://*.google.com https://pagead2.googlesyndication.com https://www.facebook.com https://jstest.authorize.net https://js.authorize.net https://apitest.authorize.net https://api.authorize.net",
       "frame-src 'self' https://bookeo.com https://*.bookeo.com https://www.googletagmanager.com",
       "form-action 'self' https://accept.authorize.net https://test.authorize.net",
       "object-src 'none'",

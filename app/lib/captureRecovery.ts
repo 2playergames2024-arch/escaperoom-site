@@ -4,8 +4,8 @@ import { Redis } from "@upstash/redis";
 import { Resend } from "resend";
 
 import {
-  captureSandboxAuthorization,
-  getSandboxTransactionState,
+  captureAuthorizeAuthorization,
+  getAuthorizeTransactionState,
 } from "@/app/lib/authorizeSandbox";
 import {
   markBookingCaptureComplete,
@@ -226,7 +226,7 @@ export async function recoverFailedCapture({
     );
 
     const state =
-      await getSandboxTransactionState(
+      await getAuthorizeTransactionState(
         transactionId
       );
 
@@ -303,7 +303,7 @@ export async function recoverFailedCapture({
     retryAttempts++;
 
     const retryResult =
-      await captureSandboxAuthorization(
+      await captureAuthorizeAuthorization(
         transactionId,
         amount
       );
@@ -364,7 +364,7 @@ export async function recoverFailedCapture({
    * instead of raising a false alarm.
    */
   const finalState =
-    await getSandboxTransactionState(
+    await getAuthorizeTransactionState(
       transactionId
     );
 

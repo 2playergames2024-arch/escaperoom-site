@@ -1,15 +1,47 @@
 import "server-only";
 
-const AUTHORIZE_SANDBOX_LOGIN_ID =
-  process.env.AUTHORIZE_SANDBOX_LOGIN_ID;
+export type AuthorizeEnvironment =
+  | "sandbox"
+  | "production";
 
-const AUTHORIZE_SANDBOX_TRANSACTION_KEY =
-  process.env.AUTHORIZE_SANDBOX_TRANSACTION_KEY;
+export function getAuthorizeEnvironment(): AuthorizeEnvironment {
+  return process.env.AUTHORIZE_ENVIRONMENT ===
+    "production"
+    ? "production"
+    : "sandbox";
+}
 
-const AUTHORIZE_SANDBOX_URL =
-  "https://apitest.authorize.net/xml/v1/request.api";
+export function getAuthorizeGatewayConfig() {
+  const environment =
+    getAuthorizeEnvironment();
 
-export type SandboxInvoiceLookupResult =
+  const production =
+    environment === "production";
+
+  const loginId = production
+    ? process.env.AUTHORIZE_LOGIN_ID
+    : process.env.AUTHORIZE_SANDBOX_LOGIN_ID;
+
+  const transactionKey = production
+    ? process.env.AUTHORIZE_TRANSACTION_KEY
+    : process.env.AUTHORIZE_SANDBOX_TRANSACTION_KEY;
+
+  const signatureKey = production
+    ? process.env.AUTHORIZE_SIGNATURE_KEY
+    : process.env.AUTHORIZE_SANDBOX_SIGNATURE_KEY;
+
+  return {
+    environment,
+    loginId,
+    transactionKey,
+    signatureKey,
+    apiUrl: production
+      ? "https://api.authorize.net/xml/v1/request.api"
+      : "https://apitest.authorize.net/xml/v1/request.api",
+  };
+}
+
+export type AuthorizeInvoiceLookupResult =
   | {
       ok: true;
       result: "FOUND";
@@ -31,17 +63,24 @@ export type SandboxInvoiceLookupResult =
       uncertain: boolean;
     };
 
-export async function findSandboxUnsettledTransactionByInvoiceNumber(
+export async function findAuthorizeUnsettledTransactionByInvoiceNumber(
   invoiceNumber: string
-): Promise<SandboxInvoiceLookupResult> {
+): Promise<AuthorizeInvoiceLookupResult> {
+  const {
+    loginId,
+    transactionKey,
+    apiUrl,
+    environment,
+  } = getAuthorizeGatewayConfig();
+
   if (
-    !AUTHORIZE_SANDBOX_LOGIN_ID ||
-    !AUTHORIZE_SANDBOX_TRANSACTION_KEY
+    !loginId ||
+    !transactionKey
   ) {
     return {
       ok: false,
       message:
-        "Authorize.Net sandbox credentials are not configured.",
+        `Authorize.Net ${environment} credentials are not configured.`,
       uncertain: false,
     };
   }
@@ -61,7 +100,7 @@ export async function findSandboxUnsettledTransactionByInvoiceNumber(
   try {
     const response =
       await fetch(
-        AUTHORIZE_SANDBOX_URL,
+        apiUrl,
         {
           method: "POST",
           cache: "no-store",
@@ -73,9 +112,9 @@ export async function findSandboxUnsettledTransactionByInvoiceNumber(
             getUnsettledTransactionListRequest: {
               merchantAuthentication: {
                 name:
-                  AUTHORIZE_SANDBOX_LOGIN_ID,
+                  loginId,
                 transactionKey:
-                  AUTHORIZE_SANDBOX_TRANSACTION_KEY,
+                  transactionKey,
               },
               sorting: {
                 orderBy:
@@ -188,17 +227,24 @@ export type VoidAuthorizationResult =
       uncertain: boolean;
     };
 
-export async function voidSandboxAuthorization(
+export async function voidAuthorizeAuthorization(
   transactionId: string
 ): Promise<VoidAuthorizationResult> {
+  const {
+    loginId,
+    transactionKey,
+    apiUrl,
+    environment,
+  } = getAuthorizeGatewayConfig();
+
   if (
-    !AUTHORIZE_SANDBOX_LOGIN_ID ||
-    !AUTHORIZE_SANDBOX_TRANSACTION_KEY
+    !loginId ||
+    !transactionKey
   ) {
     return {
       ok: false,
       message:
-        "Authorize.Net sandbox credentials are not configured.",
+        `Authorize.Net ${environment} credentials are not configured.`,
       uncertain: false,
     };
   }
@@ -206,7 +252,7 @@ export async function voidSandboxAuthorization(
   try {
     const response =
       await fetch(
-        AUTHORIZE_SANDBOX_URL,
+        apiUrl,
         {
           method: "POST",
           cache: "no-store",
@@ -218,9 +264,9 @@ export async function voidSandboxAuthorization(
             createTransactionRequest: {
               merchantAuthentication: {
                 name:
-                  AUTHORIZE_SANDBOX_LOGIN_ID,
+                  loginId,
                 transactionKey:
-                  AUTHORIZE_SANDBOX_TRANSACTION_KEY,
+                  transactionKey,
               },
               transactionRequest: {
                 transactionType:
@@ -313,18 +359,25 @@ export type CaptureAuthorizationResult =
       uncertain: boolean;
     };
 
-export async function captureSandboxAuthorization(
+export async function captureAuthorizeAuthorization(
   transactionId: string,
   amount: number
 ): Promise<CaptureAuthorizationResult> {
+  const {
+    loginId,
+    transactionKey,
+    apiUrl,
+    environment,
+  } = getAuthorizeGatewayConfig();
+
   if (
-    !AUTHORIZE_SANDBOX_LOGIN_ID ||
-    !AUTHORIZE_SANDBOX_TRANSACTION_KEY
+    !loginId ||
+    !transactionKey
   ) {
     return {
       ok: false,
       message:
-        "Authorize.Net sandbox credentials are not configured.",
+        `Authorize.Net ${environment} credentials are not configured.`,
       uncertain: false,
     };
   }
@@ -332,7 +385,7 @@ export async function captureSandboxAuthorization(
   try {
     const response =
       await fetch(
-        AUTHORIZE_SANDBOX_URL,
+        apiUrl,
         {
           method: "POST",
           cache: "no-store",
@@ -344,9 +397,9 @@ export async function captureSandboxAuthorization(
             createTransactionRequest: {
               merchantAuthentication: {
                 name:
-                  AUTHORIZE_SANDBOX_LOGIN_ID,
+                  loginId,
                 transactionKey:
-                  AUTHORIZE_SANDBOX_TRANSACTION_KEY,
+                  transactionKey,
               },
               transactionRequest: {
                 transactionType:
@@ -430,7 +483,7 @@ export async function captureSandboxAuthorization(
   }
 }
 
-export type SandboxTransactionStateResult =
+export type AuthorizeTransactionStateResult =
   | {
       ok: true;
       transactionId: string;
@@ -444,17 +497,24 @@ export type SandboxTransactionStateResult =
       uncertain: boolean;
     };
 
-export async function getSandboxTransactionState(
+export async function getAuthorizeTransactionState(
   transactionId: string
-): Promise<SandboxTransactionStateResult> {
+): Promise<AuthorizeTransactionStateResult> {
+  const {
+    loginId,
+    transactionKey,
+    apiUrl,
+    environment,
+  } = getAuthorizeGatewayConfig();
+
   if (
-    !AUTHORIZE_SANDBOX_LOGIN_ID ||
-    !AUTHORIZE_SANDBOX_TRANSACTION_KEY
+    !loginId ||
+    !transactionKey
   ) {
     return {
       ok: false,
       message:
-        "Authorize.Net sandbox credentials are not configured.",
+        `Authorize.Net ${environment} credentials are not configured.`,
       uncertain: false,
     };
   }
@@ -462,7 +522,7 @@ export async function getSandboxTransactionState(
   try {
     const response =
       await fetch(
-        AUTHORIZE_SANDBOX_URL,
+        apiUrl,
         {
           method: "POST",
           cache: "no-store",
@@ -474,9 +534,9 @@ export async function getSandboxTransactionState(
             getTransactionDetailsRequest: {
               merchantAuthentication: {
                 name:
-                  AUTHORIZE_SANDBOX_LOGIN_ID,
+                  loginId,
                 transactionKey:
-                  AUTHORIZE_SANDBOX_TRANSACTION_KEY,
+                  transactionKey,
               },
               transId:
                 transactionId,
@@ -565,3 +625,18 @@ export async function getSandboxTransactionState(
     };
   }
 }
+
+// Backward-compatible aliases for any older imports that
+// have not yet been renamed.
+export const findSandboxUnsettledTransactionByInvoiceNumber =
+  findAuthorizeUnsettledTransactionByInvoiceNumber;
+export const voidSandboxAuthorization =
+  voidAuthorizeAuthorization;
+export const captureSandboxAuthorization =
+  captureAuthorizeAuthorization;
+export const getSandboxTransactionState =
+  getAuthorizeTransactionState;
+export type SandboxInvoiceLookupResult =
+  AuthorizeInvoiceLookupResult;
+export type SandboxTransactionStateResult =
+  AuthorizeTransactionStateResult;

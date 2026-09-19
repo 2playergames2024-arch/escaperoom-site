@@ -284,8 +284,23 @@ function BookingDetailsPageContent() {
        * The payment URL now contains only the
        * opaque server-generated session ID.
        */
+      const bookingV2Enabled =
+        process.env
+          .NEXT_PUBLIC_BOOKING_V2_ENABLED
+          ? process.env
+              .NEXT_PUBLIC_BOOKING_V2_ENABLED ===
+            "true"
+          : process.env
+              .NEXT_PUBLIC_AUTHORIZE_ENVIRONMENT !==
+            "production";
+
+      const paymentPath =
+        bookingV2Enabled
+          ? "/book/payment"
+          : "/book/payment-legacy";
+
       window.location.href =
-        `/book/payment?sessionId=${encodeURIComponent(
+        `${paymentPath}?sessionId=${encodeURIComponent(
           sessionId
         )}`;
     } catch (err) {

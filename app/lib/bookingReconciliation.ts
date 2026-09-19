@@ -7,9 +7,9 @@ import {
   type BookingSession,
 } from "@/app/lib/booking";
 import {
-  findSandboxUnsettledTransactionByInvoiceNumber,
-  getSandboxTransactionState,
-  voidSandboxAuthorization,
+  findAuthorizeUnsettledTransactionByInvoiceNumber,
+  getAuthorizeTransactionState,
+  voidAuthorizeAuthorization,
 } from "@/app/lib/authorizeSandbox";
 import {
   lookupFinalBookeoBooking,
@@ -333,7 +333,7 @@ export async function reconcileBookingLedgerRow(
       );
 
     const invoiceLookup =
-      await findSandboxUnsettledTransactionByInvoiceNumber(
+      await findAuthorizeUnsettledTransactionByInvoiceNumber(
         invoiceNumber
       );
 
@@ -427,7 +427,7 @@ export async function reconcileBookingLedgerRow(
   }
 
   const gatewayState =
-    await getSandboxTransactionState(
+    await getAuthorizeTransactionState(
       transactionId
     );
 
@@ -754,7 +754,7 @@ export async function reconcileBookingLedgerRow(
         recoveredAuthorizingTransaction
       ) {
         const voidResult =
-          await voidSandboxAuthorization(
+          await voidAuthorizeAuthorization(
             transactionId
           );
 

@@ -652,7 +652,20 @@ export default function LocationBookingPage({
               </p>
 
               <Link
-                href={`/book/payment?sessionId=${encodeURIComponent(
+                href={`${
+                  (
+                    process.env
+                      .NEXT_PUBLIC_BOOKING_V2_ENABLED
+                      ? process.env
+                          .NEXT_PUBLIC_BOOKING_V2_ENABLED ===
+                        "true"
+                      : process.env
+                          .NEXT_PUBLIC_AUTHORIZE_ENVIRONMENT !==
+                        "production"
+                  )
+                    ? "/book/payment"
+                    : "/book/payment-legacy"
+                }?sessionId=${encodeURIComponent(
                   resumeBooking.sessionId
                 )}`}
                 className="mt-3 inline-block rounded bg-orange-500 px-6 py-3 font-black uppercase text-white hover:bg-orange-600"

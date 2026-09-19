@@ -71,6 +71,18 @@ declare global {
 function PaymentPageContent() {
   const searchParams = useSearchParams();
 
+  const authorizeEnvironment =
+    process.env
+      .NEXT_PUBLIC_AUTHORIZE_ENVIRONMENT ===
+      "production"
+      ? "production"
+      : "sandbox";
+
+  const acceptJsUrl =
+    authorizeEnvironment === "production"
+      ? "https://js.authorize.net/v1/Accept.js"
+      : "https://jstest.authorize.net/v1/Accept.js";
+
   const sessionId =
     searchParams.get("sessionId") || "";
 
@@ -195,17 +207,32 @@ function PaymentPageContent() {
       false;
 
     try {
-      const apiLoginID =
+      const authorizeEnvironment =
         process.env
-          .NEXT_PUBLIC_AUTHORIZE_SANDBOX_LOGIN_ID;
+          .NEXT_PUBLIC_AUTHORIZE_ENVIRONMENT ===
+          "production"
+          ? "production"
+          : "sandbox";
+
+      const apiLoginID =
+        authorizeEnvironment ===
+        "production"
+          ? process.env
+              .NEXT_PUBLIC_AUTHORIZE_LOGIN_ID
+          : process.env
+              .NEXT_PUBLIC_AUTHORIZE_SANDBOX_LOGIN_ID;
 
       const clientKey =
-        process.env
-          .NEXT_PUBLIC_AUTHORIZE_SANDBOX_CLIENT_KEY;
+        authorizeEnvironment ===
+        "production"
+          ? process.env
+              .NEXT_PUBLIC_AUTHORIZE_CLIENT_KEY
+          : process.env
+              .NEXT_PUBLIC_AUTHORIZE_SANDBOX_CLIENT_KEY;
 
       if (!apiLoginID || !clientKey) {
         throw new Error(
-          "Authorize.Net sandbox credentials are not configured."
+          `Authorize.Net ${authorizeEnvironment} public credentials are not configured.`
         );
       }
 
@@ -258,7 +285,7 @@ function PaymentPageContent() {
         );
 
       console.log(
-        "Accept.js sandbox token received.",
+        "Accept.js payment token received.",
         {
           dataDescriptor:
             opaqueData.dataDescriptor,
@@ -594,7 +621,7 @@ function PaymentPageContent() {
   return (
     <>
       <Script
-        src="https://jstest.authorize.net/v1/Accept.js"
+        src={acceptJsUrl}
         strategy="afterInteractive"
         onReady={() => {
           setAcceptReady(true);

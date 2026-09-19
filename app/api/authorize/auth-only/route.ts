@@ -15,8 +15,9 @@ import {
   ensurePreAuthHold,
 } from "@/app/lib/preAuthHold";
 import {
-  captureSandboxAuthorization,
-  voidSandboxAuthorization,
+  captureAuthorizeAuthorization,
+  getAuthorizeGatewayConfig,
+  voidAuthorizeAuthorization,
 } from "@/app/lib/authorizeSandbox";
 import {
   recoverFailedCapture,
@@ -33,14 +34,6 @@ import {
 
 const redis = Redis.fromEnv();
 
-const AUTHORIZE_SANDBOX_LOGIN_ID =
-  process.env.AUTHORIZE_SANDBOX_LOGIN_ID;
-
-const AUTHORIZE_SANDBOX_TRANSACTION_KEY =
-  process.env.AUTHORIZE_SANDBOX_TRANSACTION_KEY;
-
-const AUTHORIZE_SANDBOX_URL =
-  "https://apitest.authorize.net/xml/v1/request.api";
 
 async function captureBookedCheckout({
   checkoutId,
@@ -74,7 +67,7 @@ async function captureBookedCheckout({
   );
 
   const captureResult =
-    await captureSandboxAuthorization(
+    await captureAuthorizeAuthorization(
       transactionId,
       amount
     );
@@ -273,14 +266,40 @@ export async function POST(
   request: NextRequest
 ) {
   try {
+    const bookingV2Enabled =
+      process.env.BOOKING_V2_ENABLED
+        ? process.env.BOOKING_V2_ENABLED ===
+          "true"
+        : process.env.AUTHORIZE_ENVIRONMENT ===
+          "sandbox";
+
+    if (!bookingV2Enabled) {
+      return NextResponse.json(
+        {
+          error:
+            "This payment flow is not enabled.",
+        },
+        {
+          status: 404,
+        }
+      );
+    }
+
+    const {
+      loginId,
+      transactionKey,
+      apiUrl,
+      environment,
+    } = getAuthorizeGatewayConfig();
+
     if (
-      !AUTHORIZE_SANDBOX_LOGIN_ID ||
-      !AUTHORIZE_SANDBOX_TRANSACTION_KEY
+      !loginId ||
+      !transactionKey
     ) {
       return NextResponse.json(
         {
           error:
-            "Authorize.Net sandbox credentials are not configured.",
+            `Authorize.Net ${environment} credentials are not configured.`,
         },
         {
           status: 500,
@@ -472,9 +491,9 @@ export async function POST(
       createTransactionRequest: {
         merchantAuthentication: {
           name:
-            AUTHORIZE_SANDBOX_LOGIN_ID,
+            loginId,
           transactionKey:
-            AUTHORIZE_SANDBOX_TRANSACTION_KEY,
+            transactionKey,
         },
 
         refId:
@@ -535,7 +554,7 @@ export async function POST(
     try {
       authorizeResponse =
         await fetch(
-          AUTHORIZE_SANDBOX_URL,
+          apiUrl,
           {
             method: "POST",
             cache: "no-store",
@@ -710,7 +729,7 @@ export async function POST(
           "UNAVAILABLE"
         ) {
           const voidResult =
-            await voidSandboxAuthorization(
+            await voidAuthorizeAuthorization(
               transactionId
             );
 
@@ -860,7 +879,7 @@ export async function POST(
           "REJECTED"
         ) {
           const voidResult =
-            await voidSandboxAuthorization(
+            await voidAuthorizeAuthorization(
               transactionId
             );
 
@@ -1149,7 +1168,7 @@ export async function POST(
             "UNAVAILABLE"
           ) {
             const voidResult =
-              await voidSandboxAuthorization(
+              await voidAuthorizeAuthorization(
                 transactionId
               );
 
@@ -1304,7 +1323,7 @@ export async function POST(
           "REJECTED"
         ) {
           const voidResult =
-            await voidSandboxAuthorization(
+            await voidAuthorizeAuthorization(
               transactionId
             );
 
@@ -1502,7 +1521,7 @@ export async function POST(
          * exhausted. Void the authorization.
          */
         const finalVoidResult =
-          await voidSandboxAuthorization(
+          await voidAuthorizeAuthorization(
             transactionId
           );
 
