@@ -269,9 +269,9 @@ export async function POST(
     const bookingV2Enabled =
       process.env.BOOKING_V2_ENABLED
         ? process.env.BOOKING_V2_ENABLED ===
-          "true"
+        "true"
         : process.env.AUTHORIZE_ENVIRONMENT ===
-          "sandbox";
+        "sandbox";
 
     if (!bookingV2Enabled) {
       return NextResponse.json(
@@ -525,6 +525,16 @@ export async function POST(
                 20
               ),
           },
+
+          customer: {
+            type: "individual",
+            email: session.email,
+          },
+
+          billTo: {
+            firstName: session.firstName,
+            lastName: session.lastName,
+          },
         },
       },
     };
@@ -645,9 +655,9 @@ export async function POST(
           session.checkoutId,
         ...(confirmedTransactionId
           ? {
-              authorizeTransactionId:
-                confirmedTransactionId,
-            }
+            authorizeTransactionId:
+              confirmedTransactionId,
+          }
           : {}),
         errorCode:
           "AUTHORIZATION_RESULT_UNCERTAIN",
@@ -1694,9 +1704,9 @@ export async function POST(
         session.checkoutId,
       ...(confirmedTransactionId
         ? {
-            authorizeTransactionId:
-              confirmedTransactionId,
-          }
+          authorizeTransactionId:
+            confirmedTransactionId,
+        }
         : {}),
       errorCode:
         "AUTHORIZATION_RESULT_UNCERTAIN",
