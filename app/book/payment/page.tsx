@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import Script from "next/script";
@@ -98,6 +98,13 @@ function PaymentPageContent() {
   const [isPaying, setIsPaying] =
     useState(false);
 
+  const [
+    processingMessage,
+    setProcessingMessage,
+  ] = useState(
+    "Confirming your booking..."
+  );
+
   const [error, setError] =
     useState("");
 
@@ -127,6 +134,193 @@ function PaymentPageContent() {
 
   const paymentAttemptRef =
     useRef(false);
+
+  const paymentResolvedRef =
+    useRef(false);
+
+  const watchdogStartedRef =
+    useRef(false);
+
+  const processingTimersRef =
+    useRef<
+      Array<
+        ReturnType<
+          typeof setTimeout
+        >
+      >
+    >([]);
+
+  function clearProcessingTimers() {
+    for (
+      const timer of
+      processingTimersRef.current
+    ) {
+      clearTimeout(timer);
+    }
+
+    processingTimersRef.current = [];
+  }
+
+  async function runWatchdogResolution() {
+    while (
+      !paymentResolvedRef.current
+    ) {
+      try {
+        const response =
+          await fetch(
+            "/api/booking-watchdog",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type":
+                  "application/json",
+              },
+              body: JSON.stringify({
+                sessionId,
+              }),
+              cache: "no-store",
+            }
+          );
+
+        const data =
+          await response.json();
+
+        if (
+          paymentResolvedRef.current
+        ) {
+          return;
+        }
+
+        if (
+          data.status ===
+            "confirmed" &&
+          data.bookingId
+        ) {
+          paymentResolvedRef.current =
+            true;
+
+          clearProcessingTimers();
+
+          trackClarityEvent(
+            "booking_completed"
+          );
+
+          setConfirmation({
+            bookeoBookingId:
+              String(
+                data.bookingId
+              ),
+          });
+
+          setIsPaying(false);
+          return;
+        }
+
+        if (
+          data.status === "failed"
+        ) {
+          paymentResolvedRef.current =
+            true;
+
+          clearProcessingTimers();
+
+          setPaymentNotice({
+            title:
+              "Booking Could Not Be Completed",
+            message:
+              "We could not complete your booking. Please try again or try another card.",
+            instruction:
+            "Close this message, then use Change Room, Date, or Time below to start again.",
+          });
+
+          setIsPaying(false);
+          return;
+        }
+
+        setProcessingMessage(
+          "We're still verifying your booking and payment status. Please do not refresh or submit payment again."
+        );
+      } catch {
+        setProcessingMessage(
+          "We're still verifying your booking and payment status. Please do not refresh or submit payment again."
+        );
+      }
+
+      await new Promise(
+        (resolve) =>
+          setTimeout(
+            resolve,
+            3000
+          )
+      );
+    }
+  }
+
+  function startWatchdogResolution() {
+    if (
+      watchdogStartedRef.current ||
+      paymentResolvedRef.current
+    ) {
+      return;
+    }
+
+    watchdogStartedRef.current =
+      true;
+
+    clearProcessingTimers();
+
+    setProcessingMessage(
+      "We're verifying your booking and payment status now. Please do not refresh or submit payment again."
+    );
+
+    void runWatchdogResolution();
+  }
+
+  function startProcessingTimers() {
+    clearProcessingTimers();
+
+    processingTimersRef.current = [
+      setTimeout(() => {
+        if (
+          !paymentResolvedRef.current
+        ) {
+          setProcessingMessage(
+            "This is taking a little longer than expected. Thanks for your patience."
+          );
+        }
+      }, 10_000),
+
+      setTimeout(() => {
+        if (
+          !paymentResolvedRef.current
+        ) {
+          setProcessingMessage(
+            "We're still processing your booking and payment. Please do not refresh or submit payment again."
+          );
+        }
+      }, 20_000),
+
+      setTimeout(() => {
+        startWatchdogResolution();
+      }, 30_000),
+    ];
+  }
+
+  useEffect(() => {
+    return () => {
+      for (
+        const timer of
+        processingTimersRef.current
+      ) {
+        clearTimeout(timer);
+      }
+
+      processingTimersRef.current = [];
+
+      paymentResolvedRef.current =
+        true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -199,6 +393,15 @@ function PaymentPageContent() {
     }
 
     paymentAttemptRef.current = true;
+    paymentResolvedRef.current = false;
+    watchdogStartedRef.current = false;
+
+    clearProcessingTimers();
+
+    setProcessingMessage(
+      "Confirming your booking..."
+    );
+
     setIsPaying(true);
     setError("");
     setPaymentNotice(null);
@@ -301,6 +504,8 @@ function PaymentPageContent() {
       authorizationStarted = true;
       setPaymentLocked(true);
 
+      startProcessingTimers();
+
       const authorizationResponse =
         await fetch(
           "/api/authorize/auth-only",
@@ -321,6 +526,12 @@ function PaymentPageContent() {
         await authorizationResponse.json();
 
       if (
+        paymentResolvedRef.current
+      ) {
+        return;
+      }
+
+      if (
         authorizationResponse.ok &&
         authorizationData.authorized &&
         authorizationData.booked &&
@@ -328,6 +539,9 @@ function PaymentPageContent() {
         authorizationData.complete &&
         authorizationData.bookeoBookingId
       ) {
+        paymentResolvedRef.current = true;
+        clearProcessingTimers();
+
         trackClarityEvent(
           "payment_authorized"
         );
@@ -349,6 +563,9 @@ function PaymentPageContent() {
       if (
         authorizationData.unavailable
       ) {
+        paymentResolvedRef.current = true;
+        clearProcessingTimers();
+
         setPaymentNotice({
           title:
             "That Time Is No Longer Available",
@@ -356,7 +573,7 @@ function PaymentPageContent() {
             authorizationData.error ||
             "Unfortunately, those seats became unavailable before your booking could be completed.",
           instruction:
-            "Close this message, then choose Change Room, Date, or Time below to select another available time.",
+            "Close this message, then use Change Room, Date, or Time below to start again.",
         });
 
         return;
@@ -365,6 +582,9 @@ function PaymentPageContent() {
       if (
         authorizationData.declined
       ) {
+        paymentResolvedRef.current = true;
+        clearProcessingTimers();
+
         /*
          * A definite decline means Authorize.Net did
          * not approve an authorization. It is safe to
@@ -388,20 +608,16 @@ function PaymentPageContent() {
       }
 
       if (
+        authorizationData.watchdogTakeover ||
         authorizationData.recoveryRequired ||
         authorizationData.uncertain
       ) {
-        setPaymentNotice({
-          title:
-            "We're Confirming Your Booking",
-          message:
-            "We received your payment request, but the final booking status could not be confirmed immediately.",
-          instruction:
-            "Please do not submit another payment. Close this message and contact us if you need assistance.",
-        });
-
+        startWatchdogResolution();
         return;
       }
+
+      paymentResolvedRef.current = true;
+      clearProcessingTimers();
 
       setPaymentNotice({
         title:
@@ -410,30 +626,36 @@ function PaymentPageContent() {
           authorizationData.error ||
           "We could not complete your booking.",
         instruction:
-          "Close this message, then use Change Room, Date, or Time below to start again.",
+            "Close this message, then use Change Room, Date, or Time below to start again.",
       });
     } catch (err) {
-      if (!authorizationStarted) {
-        paymentAttemptRef.current = false;
-        setPaymentLocked(false);
+      if (authorizationStarted) {
+        startWatchdogResolution();
+        return;
       }
 
+      paymentResolvedRef.current = true;
+      clearProcessingTimers();
+
+      paymentAttemptRef.current = false;
+      setPaymentLocked(false);
+
       setPaymentNotice({
-        title: authorizationStarted
-          ? "Booking Could Not Be Confirmed"
-          : "Card Information Could Not Be Submitted",
+        title:
+          "Card Information Could Not Be Submitted",
         message:
           err instanceof Error
             ? err.message
-            : authorizationStarted
-              ? "We could not confirm the final booking status."
-              : "We could not securely submit the card information.",
-        instruction: authorizationStarted
-          ? "Please do not submit another payment. Close this message and contact us if you need assistance."
-          : "Check the card information and try again.",
+            : "We could not securely submit the card information.",
+        instruction:
+          "Check the card information and try again.",
       });
     } finally {
-      setIsPaying(false);
+      if (
+        !watchdogStartedRef.current
+      ) {
+        setIsPaying(false);
+      }
     }
   }
 
@@ -861,7 +1083,7 @@ function PaymentPageContent() {
             href={bookingHref}
             className="mt-3 inline-block text-sm font-black uppercase text-orange-500"
           >
-            ← Change Room, Date, or Time
+            &larr; Change Room, Date, or Time
           </Link>
         </section>
 
@@ -923,7 +1145,7 @@ function PaymentPageContent() {
               </h2>
 
               <p className="mt-2 text-lg font-semibold text-slate-700">
-                Confirming your booking...
+                {processingMessage}
               </p>
             </div>
           </div>
@@ -946,3 +1168,5 @@ export default function PaymentPage() {
     </Suspense>
   );
 }
+
+

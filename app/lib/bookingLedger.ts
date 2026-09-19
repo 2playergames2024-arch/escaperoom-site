@@ -360,7 +360,52 @@ export async function getBookingLedgerReconciliationCandidates({
       AND updated_at >=
         NOW() -
         (${newerThanHours} * INTERVAL '1 hour')
+      AND NOT (
+        error_code = 'BOOKEO_PAYMENT_SYNC_PENDING'
+        AND created_at <=
+          NOW() -
+          (${newerThanHours} * INTERVAL '1 hour')
+      )
     ORDER BY updated_at ASC
+    LIMIT ${safeLimit}
+  `;
+
+  return rows;
+}
+
+export async function getBookeoPaymentSyncManualReviewCandidates({
+  olderThanHours = 6,
+  limit = 25,
+}: {
+  olderThanHours?: number;
+  limit?: number;
+}) {
+  const sql = getSql();
+
+  const safeLimit =
+    Math.max(
+      1,
+      Math.min(
+        100,
+        Math.floor(limit)
+      )
+    );
+
+  const rows = await sql`
+    SELECT *
+    FROM booking_ledger
+    WHERE
+      error_code = 'BOOKEO_PAYMENT_SYNC_PENDING'
+      AND status IN (
+        ${BOOKING_STATES.BOOKED},
+        ${BOOKING_STATES.CAPTURE_FAILED}
+      )
+      AND authorize_transaction_id IS NOT NULL
+      AND bookeo_booking_id IS NOT NULL
+      AND created_at <=
+        NOW() -
+        (${olderThanHours} * INTERVAL '1 hour')
+    ORDER BY created_at ASC
     LIMIT ${safeLimit}
   `;
 

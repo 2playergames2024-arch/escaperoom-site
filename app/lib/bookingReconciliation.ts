@@ -27,6 +27,9 @@ import {
 import {
   logBookingEvent,
 } from "@/app/lib/bookingLog";
+import {
+  ensureBookeoPaymentRecorded,
+} from "@/app/lib/bookeoPaymentSync";
 
 const redis = Redis.fromEnv();
 
@@ -55,6 +58,8 @@ type LedgerRow = {
   bookeo_booking_id?: string | null;
   bookeoBookingId?: string | null;
   status?: string;
+  error_code?: string | null;
+  errorCode?: string | null;
 };
 
 export type BookingReconciliationResult = {
@@ -100,6 +105,90 @@ function getBookeoBookingId(
     row.bookeoBookingId ||
     ""
   ).trim();
+}
+
+function getCapturedAmount(
+  gatewayState: {
+    authorizedAmount: number | null;
+    settledAmount: number | null;
+  }
+) {
+  const settled =
+    gatewayState.settledAmount;
+
+  if (
+    settled !== null &&
+    Number.isFinite(settled) &&
+    settled > 0
+  ) {
+    return settled;
+  }
+
+  const authorized =
+    gatewayState.authorizedAmount;
+
+  return (
+    authorized !== null &&
+    Number.isFinite(authorized) &&
+    authorized > 0
+  )
+    ? authorized
+    : null;
+}
+
+async function syncCapturedPaymentOrLeavePending({
+  checkoutId,
+  transactionId,
+  bookeoBookingId,
+  amount,
+  currentStatus,
+}: {
+  checkoutId: string;
+  transactionId: string;
+  bookeoBookingId: string;
+  amount: number;
+  currentStatus: string;
+}) {
+  const paymentSync =
+    await ensureBookeoPaymentRecorded({
+      checkoutId,
+      bookingNumber:
+        bookeoBookingId,
+      transactionId,
+      amount,
+    });
+
+  if (paymentSync.ok) {
+    await markBookingCaptureComplete(
+      checkoutId
+    );
+
+    return true;
+  }
+
+  await updateBookingLedgerRecord({
+    checkoutId,
+    status:
+      currentStatus ===
+        BOOKING_STATES.CAPTURE_FAILED
+        ? BOOKING_STATES.CAPTURE_FAILED
+        : BOOKING_STATES.BOOKED,
+    errorCode:
+      "BOOKEO_PAYMENT_SYNC_PENDING",
+    errorMessage:
+      paymentSync.message,
+    errorData: {
+      authorizeTransactionId:
+        transactionId,
+      bookeoBookingId,
+      amount,
+      captured: true,
+      uncertain:
+        paymentSync.uncertain,
+    },
+  });
+
+  return false;
 }
 
 async function sendReconciliationAlert({
@@ -234,6 +323,49 @@ async function markManualReview({
   };
 }
 
+export async function markBookeoPaymentSyncManualReview(
+  row: LedgerRow
+): Promise<BookingReconciliationResult> {
+  const checkoutId =
+    getCheckoutId(row);
+  const transactionId =
+    getTransactionId(row);
+  const bookeoBookingId =
+    getBookeoBookingId(row);
+
+  if (
+    !checkoutId ||
+    !transactionId ||
+    !bookeoBookingId
+  ) {
+    return {
+      ok: false,
+      checkoutId,
+      action: "MANUAL_REVIEW",
+      message:
+        "A stale Bookeo payment sync row was missing required identifiers.",
+    };
+  }
+
+  const errorMessage =
+    "Bookeo booking exists and Authorize.Net payment is confirmed, but the payment record could not be synchronized into Bookeo after six hours. Please investigate manually.";
+
+  return markManualReview({
+    checkoutId,
+    transactionId,
+    errorCode:
+      "BOOKEO_PAYMENT_SYNC_MANUAL_REVIEW",
+    errorMessage,
+    errorData: {
+      bookeoBookingId,
+      authorizeTransactionId:
+        transactionId,
+      automaticRetriesStopped:
+        true,
+    },
+  });
+}
+
 async function loadBookingSession(
   checkoutId: string,
   holdId: string
@@ -315,6 +447,26 @@ export async function reconcileBookingLedgerRow(
       action: "SKIPPED",
       message:
         "Ledger row is missing checkout ID.",
+    };
+  }
+
+  /*
+   * A live 30-second checkout watchdog owns resolution
+   * for this checkout. Do not let delayed reconciliation
+   * capture, void, or otherwise race that cleanup path.
+   */
+  const watchdogTakeover =
+    await redis.get<string>(
+      `booking-watchdog:takeover:${checkoutId}`
+    );
+
+  if (watchdogTakeover === "1") {
+    return {
+      ok: true,
+      checkoutId,
+      action: "SKIPPED",
+      message:
+        "Checkout watchdog currently owns transaction resolution.",
     };
   }
 
@@ -488,15 +640,48 @@ export async function reconcileBookingLedgerRow(
         gatewayState.status
       )
     ) {
-      await markBookingCaptureComplete(
-        checkoutId
-      );
+      const amount =
+        getCapturedAmount(
+          gatewayState
+        );
+
+      if (amount === null) {
+        return markManualReview({
+          checkoutId,
+          transactionId,
+          errorCode:
+            "RECONCILE_CAPTURED_AMOUNT_MISSING",
+          errorMessage:
+            "Authorize.Net reports captured payment, but no usable captured amount was returned for Bookeo payment synchronization.",
+          errorData: {
+            gatewayStatus:
+              gatewayState.status,
+            bookeoBookingId,
+          },
+        });
+      }
+
+      const synced =
+        await syncCapturedPaymentOrLeavePending({
+          checkoutId,
+          transactionId,
+          bookeoBookingId,
+          amount,
+          currentStatus:
+            ledgerStatus,
+        });
 
       return {
-        ok: true,
+        ok: synced,
         checkoutId,
         action:
-          "MARKED_COMPLETE",
+          synced
+            ? "MARKED_COMPLETE"
+            : "NO_CHANGE",
+        message:
+          synced
+            ? undefined
+            : "Captured payment is awaiting Bookeo payment synchronization.",
       };
     }
 
@@ -863,15 +1048,48 @@ export async function reconcileBookingLedgerRow(
       gatewayState.status
     )
   ) {
-    await markBookingCaptureComplete(
-      checkoutId
-    );
+    const amount =
+      getCapturedAmount(
+        gatewayState
+      );
+
+    if (amount === null) {
+      return markManualReview({
+        checkoutId,
+        transactionId,
+        errorCode:
+          "RECONCILE_CAPTURED_AMOUNT_MISSING",
+        errorMessage:
+          "Authorize.Net reports captured payment, but no usable captured amount was returned for Bookeo payment synchronization.",
+        errorData: {
+          gatewayStatus:
+            gatewayState.status,
+          bookeoBookingId,
+        },
+      });
+    }
+
+    const synced =
+      await syncCapturedPaymentOrLeavePending({
+        checkoutId,
+        transactionId,
+        bookeoBookingId,
+        amount,
+        currentStatus:
+          BOOKING_STATES.BOOKED,
+      });
 
     return {
-      ok: true,
+      ok: synced,
       checkoutId,
       action:
-        "BOOKEO_FOUND_AND_COMPLETE",
+        synced
+          ? "BOOKEO_FOUND_AND_COMPLETE"
+          : "NO_CHANGE",
+      message:
+        synced
+          ? undefined
+          : "Captured payment is awaiting Bookeo payment synchronization.",
     };
   }
 
@@ -962,3 +1180,4 @@ export async function reconcileBookingLedgerRow(
     },
   });
 }
+

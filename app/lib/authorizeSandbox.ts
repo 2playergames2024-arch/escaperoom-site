@@ -97,84 +97,105 @@ export async function findAuthorizeUnsettledTransactionByInvoiceNumber(
     };
   }
 
+  const PAGE_SIZE = 1000;
+
   try {
-    const response =
-      await fetch(
-        apiUrl,
-        {
-          method: "POST",
-          cache: "no-store",
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
-          body: JSON.stringify({
-            getUnsettledTransactionListRequest: {
-              merchantAuthentication: {
-                name:
-                  loginId,
-                transactionKey:
-                  transactionKey,
-              },
-              sorting: {
-                orderBy:
-                  "submitTimeUTC",
-                orderDescending:
-                  true,
-              },
-              paging: {
-                limit: 1000,
-                offset: 1,
-              },
+    const matches: Array<{
+      transId?: string | number;
+      transactionStatus?: string;
+    }> = [];
+
+    for (
+      let offset = 1;
+      ;
+      offset++
+    ) {
+      const response =
+        await fetch(
+          apiUrl,
+          {
+            method: "POST",
+            cache: "no-store",
+            headers: {
+              "Content-Type":
+                "application/json",
             },
-          }),
-          signal:
-            AbortSignal.timeout(
-              15_000
-            ),
-        }
-      );
+            body: JSON.stringify({
+              getUnsettledTransactionListRequest: {
+                merchantAuthentication: {
+                  name:
+                    loginId,
+                  transactionKey:
+                    transactionKey,
+                },
+                sorting: {
+                  orderBy:
+                    "submitTimeUTC",
+                  orderDescending:
+                    true,
+                },
+                paging: {
+                  limit: PAGE_SIZE,
+                  offset,
+                },
+              },
+            }),
+            signal:
+              AbortSignal.timeout(
+                15_000
+              ),
+          }
+        );
 
-    if (!response.ok) {
-      return {
-        ok: false,
-        message:
-          "Authorize.Net could not list unsettled transactions.",
-        uncertain: true,
-      };
-    }
+      if (!response.ok) {
+        return {
+          ok: false,
+          message:
+            "Authorize.Net could not list unsettled transactions.",
+          uncertain: true,
+        };
+      }
 
-    const data =
-      await response.json();
+      const data =
+        await response.json();
 
-    const transactions =
-      Array.isArray(data?.transactions)
-        ? data.transactions
-        : [];
+      const transactions =
+        Array.isArray(data?.transactions)
+          ? data.transactions
+          : [];
 
-    const matches =
-      transactions.filter(
-        (transaction: any) =>
+      for (const transaction of transactions) {
+        if (
           String(
             transaction?.invoiceNumber ||
             ""
-          ).trim() ===
+          ).trim() !==
           normalizedInvoiceNumber
-      );
+        ) {
+          continue;
+        }
+
+        matches.push(transaction);
+
+        if (matches.length > 1) {
+          return {
+            ok: true,
+            result: "AMBIGUOUS",
+            matches:
+              matches.length,
+          };
+        }
+      }
+
+      if (transactions.length < PAGE_SIZE) {
+        break;
+      }
+    }
 
     if (matches.length === 0) {
       return {
         ok: true,
         result: "NO_MATCH",
-      };
-    }
-
-    if (matches.length > 1) {
-      return {
-        ok: true,
-        result: "AMBIGUOUS",
-        matches:
-          matches.length,
       };
     }
 

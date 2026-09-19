@@ -19,6 +19,9 @@ import {
 import {
   logBookingEvent,
 } from "@/app/lib/bookingLog";
+import {
+  ensureBookeoPaymentRecorded,
+} from "@/app/lib/bookeoPaymentSync";
 
 const HANDLED_PAYMENT_EVENTS =
   new Set([
@@ -347,6 +350,84 @@ export async function POST(
             BOOKING_STATES.CAPTURE_FAILED
         )
       ) {
+        const amount =
+          gatewayState.settledAmount !== null &&
+          Number.isFinite(
+            gatewayState.settledAmount
+          ) &&
+          gatewayState.settledAmount > 0
+            ? gatewayState.settledAmount
+            : gatewayState.authorizedAmount;
+
+        if (
+          amount === null ||
+          !Number.isFinite(amount) ||
+          amount <= 0
+        ) {
+          await updateBookingLedgerRecord({
+            checkoutId,
+            errorCode:
+              "BOOKEO_PAYMENT_SYNC_AMOUNT_MISSING",
+            errorMessage:
+              "Authorize.Net reports captured payment, but no usable amount was available for Bookeo payment synchronization.",
+          });
+
+          return NextResponse.json(
+            {
+              received: true,
+              reconciliationRequired:
+                true,
+            },
+            { status: 502 }
+          );
+        }
+
+        const paymentSync =
+          await ensureBookeoPaymentRecorded({
+            checkoutId,
+            bookingNumber:
+              bookeoBookingId,
+            transactionId,
+            amount,
+          });
+
+        if (!paymentSync.ok) {
+          await updateBookingLedgerRecord({
+            checkoutId,
+            status:
+              currentStatus ===
+                BOOKING_STATES.CAPTURE_FAILED
+                ? BOOKING_STATES.CAPTURE_FAILED
+                : BOOKING_STATES.BOOKED,
+            errorCode:
+              "BOOKEO_PAYMENT_SYNC_PENDING",
+            errorMessage:
+              paymentSync.message,
+            errorData: {
+              transactionId,
+              bookeoBookingId,
+              amount,
+              captured: true,
+              uncertain:
+                paymentSync.uncertain,
+            },
+          });
+
+          /*
+           * Returning non-2xx asks Authorize.Net to
+           * redeliver later. The cron reconciliation
+           * path also retries this Bookeo-only sync.
+           */
+          return NextResponse.json(
+            {
+              received: true,
+              reconciliationRequired:
+                true,
+            },
+            { status: 502 }
+          );
+        }
+
         await markBookingCaptureComplete(
           checkoutId
         );

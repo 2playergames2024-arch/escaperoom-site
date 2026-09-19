@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 import { Redis } from "@upstash/redis";
 import {
   type BookingSession,
@@ -31,8 +32,30 @@ import {
 import {
   logBookingEvent,
 } from "@/app/lib/bookingLog";
+import {
+  ensureBookeoPaymentRecorded,
+} from "@/app/lib/bookeoPaymentSync";
+import {
+  claimPaymentRouteOwnership,
+  isBookingWatchdogTakeoverRequested,
+  releasePaymentRouteOwnership,
+} from "@/app/lib/bookingWatchdog";
 
 const redis = Redis.fromEnv();
+
+function watchdogTakeoverResponse() {
+  return NextResponse.json(
+    {
+      watchdogTakeover: true,
+      uncertain: true,
+      error:
+        "The booking watchdog is verifying the final transaction state.",
+    },
+    {
+      status: 202,
+    }
+  );
+}
 
 
 async function captureBookedCheckout({
@@ -52,6 +75,18 @@ async function captureBookedCheckout({
    * STEP 23:
    * Bookeo is positively BOOKED.
    *
+   * If the 30-second watchdog has taken ownership,
+   * stop here before starting a new capture request.
+   */
+  if (
+    await isBookingWatchdogTakeoverRequested(
+      checkoutId
+    )
+  ) {
+    return watchdogTakeoverResponse();
+  }
+
+  /*
    * Make the first prior-auth capture attempt.
    */
   logBookingEvent(
@@ -84,12 +119,51 @@ async function captureBookedCheckout({
       }
     );
 
-    await updateBookingLedgerRecord({
-      checkoutId,
+    const paymentSync =
+      await ensureBookeoPaymentRecorded({
+        checkoutId,
+        bookingNumber:
+          bookeoBookingId,
+        transactionId:
+          captureResult.transactionId,
+        amount,
+      });
 
-      status:
-        BOOKING_STATES.COMPLETE,
-    });
+    if (paymentSync.ok) {
+      await updateBookingLedgerRecord({
+        checkoutId,
+        status:
+          BOOKING_STATES.COMPLETE,
+        errorCode: null,
+        errorMessage: null,
+        errorData: {},
+      });
+    } else {
+      /*
+       * The customer is already booked and captured.
+       * Never charge, capture, void, or cancel again
+       * because Bookeo bookkeeping sync failed.
+       * Leave the row BOOKED so delayed reconciliation
+       * can retry only the Bookeo payment record.
+       */
+      await updateBookingLedgerRecord({
+        checkoutId,
+        status:
+          BOOKING_STATES.BOOKED,
+        errorCode:
+          "BOOKEO_PAYMENT_SYNC_PENDING",
+        errorMessage:
+          paymentSync.message,
+        errorData: {
+          authorizeTransactionId:
+            captureResult.transactionId,
+          bookeoBookingId,
+          amount,
+          uncertain:
+            paymentSync.uncertain,
+        },
+      });
+    }
 
     return NextResponse.json({
       ...responseData,
@@ -98,6 +172,8 @@ async function captureBookedCheckout({
       booked: true,
       captured: true,
       complete: true,
+      bookeoPaymentSyncPending:
+        !paymentSync.ok,
 
       transactionId:
         captureResult.transactionId,
@@ -158,6 +234,20 @@ async function captureBookedCheckout({
   });
 
   /*
+   * If the watchdog requested takeover while the
+   * first capture call was in flight, leave the
+   * durable CAPTURE_FAILED state for the watchdog
+   * to resolve from Authorize.Net's real status.
+   */
+  if (
+    await isBookingWatchdogTakeoverRequested(
+      checkoutId
+    )
+  ) {
+    return watchdogTakeoverResponse();
+  }
+
+  /*
    * Never retry capture blindly.
    *
    * recoverFailedCapture() asks Authorize.Net for
@@ -193,6 +283,8 @@ async function captureBookedCheckout({
       booked: true,
       captured: true,
       complete: true,
+      bookeoPaymentSyncPending:
+        recoveryResult.bookeoPaymentSyncPending,
       captureRecovered:
         true,
 
@@ -265,6 +357,11 @@ type OpaqueData = {
 export async function POST(
   request: NextRequest
 ) {
+  const paymentRouteRequestId =
+    randomUUID();
+
+  let activeCheckoutId = "";
+
   try {
     const bookingV2Enabled =
       process.env.BOOKING_V2_ENABLED
@@ -371,6 +468,41 @@ export async function POST(
           status: 410,
         }
       );
+    }
+
+    /*
+     * Own this checkout while the synchronous payment
+     * route is running. The watchdog will never mutate
+     * Bookeo or Authorize.Net until this owner releases.
+     */
+    const paymentRouteOwned =
+      await claimPaymentRouteOwnership(
+        session.checkoutId,
+        paymentRouteRequestId
+      );
+
+    if (!paymentRouteOwned) {
+      return NextResponse.json(
+        {
+          error:
+            "This payment attempt is already being processed.",
+          uncertain: true,
+        },
+        {
+          status: 409,
+        }
+      );
+    }
+
+    activeCheckoutId =
+      session.checkoutId;
+
+    if (
+      await isBookingWatchdogTakeoverRequested(
+        session.checkoutId
+      )
+    ) {
+      return watchdogTakeoverResponse();
     }
 
     /*
@@ -559,6 +691,14 @@ export async function POST(
         20
       );
 
+    if (
+      await isBookingWatchdogTakeoverRequested(
+        session.checkoutId
+      )
+    ) {
+      return watchdogTakeoverResponse();
+    }
+
     let authorizeResponse: Response;
 
     try {
@@ -577,7 +717,7 @@ export async function POST(
             ),
             signal:
               AbortSignal.timeout(
-                15_000
+                30_000
               ),
           }
         );
@@ -609,6 +749,7 @@ export async function POST(
       );
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let authorizeData: any = null;
 
     try {
@@ -715,6 +856,14 @@ export async function POST(
           BOOKING_STATES.AUTHORIZED,
       });
 
+      if (
+        await isBookingWatchdogTakeoverRequested(
+          session.checkoutId
+        )
+      ) {
+        return watchdogTakeoverResponse();
+      }
+
       /*
        * STEP 19:
        * Authorization succeeded.
@@ -738,6 +887,14 @@ export async function POST(
           postAuthHoldResult.reason ===
           "UNAVAILABLE"
         ) {
+          if (
+            await isBookingWatchdogTakeoverRequested(
+              session.checkoutId
+            )
+          ) {
+            return watchdogTakeoverResponse();
+          }
+
           const voidResult =
             await voidAuthorizeAuthorization(
               transactionId
@@ -863,6 +1020,14 @@ export async function POST(
         }
       );
 
+      if (
+        await isBookingWatchdogTakeoverRequested(
+          session.checkoutId
+        )
+      ) {
+        return watchdogTakeoverResponse();
+      }
+
       /*
        * STEP 20:
        * Create the final Bookeo booking from
@@ -888,6 +1053,14 @@ export async function POST(
           finalBookeoResult.reason ===
           "REJECTED"
         ) {
+          if (
+            await isBookingWatchdogTakeoverRequested(
+              session.checkoutId
+            )
+          ) {
+            return watchdogTakeoverResponse();
+          }
+
           const voidResult =
             await voidAuthorizeAuthorization(
               transactionId
@@ -987,14 +1160,27 @@ export async function POST(
  * the booking before allowing any
  * additional CREATE attempt.
  */
-        let lastLookupError =
-          "";
+if (
+          await isBookingWatchdogTakeoverRequested(
+            session.checkoutId
+          )
+        ) {
+          return watchdogTakeoverResponse();
+        }
 
         for (
           let lookupAttempt = 1;
           lookupAttempt <= 3;
           lookupAttempt++
         ) {
+          if (
+            await isBookingWatchdogTakeoverRequested(
+              session.checkoutId
+            )
+          ) {
+            return watchdogTakeoverResponse();
+          }
+
           if (lookupAttempt > 1) {
             await new Promise(
               (resolve) =>
@@ -1031,6 +1217,14 @@ export async function POST(
               status:
                 BOOKING_STATES.BOOKED,
             });
+
+            if (
+              await isBookingWatchdogTakeoverRequested(
+                session.checkoutId
+              )
+            ) {
+              return watchdogTakeoverResponse();
+            }
 
             return captureBookedCheckout({
               checkoutId:
@@ -1106,10 +1300,7 @@ export async function POST(
            * bookings and do not CREATE again.
            */
           if (!lookupResult.ok) {
-            lastLookupError =
-              lookupResult.message;
-
-            await updateBookingLedgerRecord({
+await updateBookingLedgerRecord({
               checkoutId:
                 session.checkoutId,
 
@@ -1177,6 +1368,14 @@ export async function POST(
             retryHoldResult.reason ===
             "UNAVAILABLE"
           ) {
+            if (
+              await isBookingWatchdogTakeoverRequested(
+                session.checkoutId
+              )
+            ) {
+              return watchdogTakeoverResponse();
+            }
+
             const voidResult =
               await voidAuthorizeAuthorization(
                 transactionId
@@ -1273,6 +1472,14 @@ export async function POST(
         session =
           retryHoldResult.session;
 
+        if (
+          await isBookingWatchdogTakeoverRequested(
+            session.checkoutId
+          )
+        ) {
+          return watchdogTakeoverResponse();
+        }
+
         /*
          * Exactly ONE controlled second CREATE.
          *
@@ -1306,6 +1513,14 @@ export async function POST(
               null,
           });
 
+          if (
+            await isBookingWatchdogTakeoverRequested(
+              session.checkoutId
+            )
+          ) {
+            return watchdogTakeoverResponse();
+          }
+
           return captureBookedCheckout({
             checkoutId:
               session.checkoutId,
@@ -1332,6 +1547,14 @@ export async function POST(
           secondCreateResult.reason ===
           "REJECTED"
         ) {
+          if (
+            await isBookingWatchdogTakeoverRequested(
+              session.checkoutId
+            )
+          ) {
+            return watchdogTakeoverResponse();
+          }
+
           const voidResult =
             await voidAuthorizeAuthorization(
               transactionId
@@ -1432,6 +1655,14 @@ export async function POST(
               null,
           });
 
+          if (
+            await isBookingWatchdogTakeoverRequested(
+              session.checkoutId
+            )
+          ) {
+            return watchdogTakeoverResponse();
+          }
+
           return captureBookedCheckout({
             checkoutId:
               session.checkoutId,
@@ -1530,6 +1761,14 @@ export async function POST(
          * Both allowed CREATE attempts are now
          * exhausted. Void the authorization.
          */
+        if (
+          await isBookingWatchdogTakeoverRequested(
+            session.checkoutId
+          )
+        ) {
+          return watchdogTakeoverResponse();
+        }
+
         const finalVoidResult =
           await voidAuthorizeAuthorization(
             transactionId
@@ -1611,6 +1850,14 @@ export async function POST(
         status:
           BOOKING_STATES.BOOKED,
       });
+
+      if (
+        await isBookingWatchdogTakeoverRequested(
+          session.checkoutId
+        )
+      ) {
+        return watchdogTakeoverResponse();
+      }
 
       return captureBookedCheckout({
         checkoutId:
@@ -1747,5 +1994,20 @@ export async function POST(
         status: 502,
       }
     );
+  } finally {
+    if (activeCheckoutId) {
+      try {
+        await releasePaymentRouteOwnership(
+          activeCheckoutId,
+          paymentRouteRequestId
+        );
+      } catch (error) {
+        console.error(
+          "Could not release payment route ownership.",
+          error
+        );
+      }
+    }
   }
 }
+

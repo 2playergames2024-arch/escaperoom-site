@@ -14,6 +14,9 @@ import {
 import {
   BOOKING_STATES,
 } from "@/app/lib/bookingState";
+import {
+  ensureBookeoPaymentRecorded,
+} from "@/app/lib/bookeoPaymentSync";
 
 const redis = Redis.fromEnv();
 
@@ -40,6 +43,7 @@ type CaptureRecoverySuccess = {
     | "status_check"
     | "retry_capture";
   retryAttempts: number;
+  bookeoPaymentSyncPending: boolean;
 };
 
 type CaptureRecoveryFailure = {
@@ -180,12 +184,59 @@ ${message}
   }
 }
 
-async function markComplete(
-  checkoutId: string
-) {
-  await markBookingCaptureComplete(
-    checkoutId
-  );
+async function syncPaymentAndMarkComplete({
+  checkoutId,
+  transactionId,
+  bookeoBookingId,
+  amount,
+}: {
+  checkoutId: string;
+  transactionId: string;
+  bookeoBookingId: string;
+  amount: number;
+}) {
+  const paymentSync =
+    await ensureBookeoPaymentRecorded({
+      checkoutId,
+      bookingNumber:
+        bookeoBookingId,
+      transactionId,
+      amount,
+    });
+
+  if (paymentSync.ok) {
+    await markBookingCaptureComplete(
+      checkoutId
+    );
+
+    return false;
+  }
+
+  /*
+   * Capture is already positively confirmed.
+   * Do not touch the card again because Bookeo
+   * bookkeeping is temporarily out of sync.
+   */
+  await updateBookingLedgerRecord({
+    checkoutId,
+    status:
+      BOOKING_STATES.CAPTURE_FAILED,
+    errorCode:
+      "BOOKEO_PAYMENT_SYNC_PENDING",
+    errorMessage:
+      paymentSync.message,
+    errorData: {
+      authorizeTransactionId:
+        transactionId,
+      bookeoBookingId,
+      amount,
+      uncertain:
+        paymentSync.uncertain,
+      captured: true,
+    },
+  });
+
+  return true;
 }
 
 export async function recoverFailedCapture({
@@ -271,9 +322,14 @@ export async function recoverFailedCapture({
         state.status
       )
     ) {
-      await markComplete(
-        checkoutId
-      );
+      const bookeoPaymentSyncPending =
+        await syncPaymentAndMarkComplete({
+          checkoutId,
+          transactionId:
+            state.transactionId,
+          bookeoBookingId,
+          amount,
+        });
 
       return {
         ok: true,
@@ -282,6 +338,7 @@ export async function recoverFailedCapture({
         recoveredBy:
           "status_check",
         retryAttempts,
+        bookeoPaymentSyncPending,
       };
     }
 
@@ -309,9 +366,14 @@ export async function recoverFailedCapture({
       );
 
     if (retryResult.ok) {
-      await markComplete(
-        checkoutId
-      );
+      const bookeoPaymentSyncPending =
+        await syncPaymentAndMarkComplete({
+          checkoutId,
+          transactionId:
+            retryResult.transactionId,
+          bookeoBookingId,
+          amount,
+        });
 
       return {
         ok: true,
@@ -320,6 +382,7 @@ export async function recoverFailedCapture({
         recoveredBy:
           "retry_capture",
         retryAttempts,
+        bookeoPaymentSyncPending,
       };
     }
 
@@ -377,9 +440,14 @@ export async function recoverFailedCapture({
         finalState.status
       )
     ) {
-      await markComplete(
-        checkoutId
-      );
+      const bookeoPaymentSyncPending =
+        await syncPaymentAndMarkComplete({
+          checkoutId,
+          transactionId:
+            finalState.transactionId,
+          bookeoBookingId,
+          amount,
+        });
 
       return {
         ok: true,
@@ -388,6 +456,7 @@ export async function recoverFailedCapture({
         recoveredBy:
           "status_check",
         retryAttempts,
+        bookeoPaymentSyncPending,
       };
     }
 

@@ -7,8 +7,10 @@ import { Redis } from "@upstash/redis";
 
 import {
   getBookingLedgerReconciliationCandidates,
+  getBookeoPaymentSyncManualReviewCandidates,
 } from "@/app/lib/bookingLedger";
 import {
+  markBookeoPaymentSyncManualReview,
   reconcileBookingLedgerRow,
 } from "@/app/lib/bookingReconciliation";
 import {
@@ -50,6 +52,12 @@ export async function GET(
     await getBookingLedgerReconciliationCandidates({
       olderThanSeconds: 60,
       newerThanHours: 6,
+      limit: 25,
+    });
+
+  const stalePaymentSyncCandidates =
+    await getBookeoPaymentSyncManualReviewCandidates({
+      olderThanHours: 6,
       limit: 25,
     });
 
@@ -178,6 +186,35 @@ export async function GET(
         );
       }
     }
+  }
+
+  for (const row of stalePaymentSyncCandidates) {
+    const checkoutId =
+      String(
+        row.checkout_id ||
+        row.checkoutId ||
+        ""
+      ).trim();
+
+    if (!checkoutId) {
+      continue;
+    }
+
+    const result =
+      await markBookeoPaymentSyncManualReview(
+        row
+      );
+
+    results.push({
+      checkoutId:
+        result.checkoutId,
+      action:
+        result.action,
+      ok:
+        result.ok,
+    });
+
+    manualReview++;
   }
 
   logBookingEvent(
