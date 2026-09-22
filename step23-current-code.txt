@@ -1,0 +1,309 @@
+﻿===== authorizeSandbox.ts =====
+import "server-only";
+
+const AUTHORIZE_SANDBOX_LOGIN_ID =
+  process.env.AUTHORIZE_SANDBOX_LOGIN_ID;
+
+const AUTHORIZE_SANDBOX_TRANSACTION_KEY =
+  process.env.AUTHORIZE_SANDBOX_TRANSACTION_KEY;
+
+const AUTHORIZE_SANDBOX_URL =
+  "https://apitest.authorize.net/xml/v1/request.api";
+
+export type VoidAuthorizationResult =
+  | {
+      ok: true;
+      transactionId: string;
+    }
+  | {
+      ok: false;
+      message: string;
+      uncertain: boolean;
+    };
+
+export async function voidSandboxAuthorization(
+  transactionId: string
+): Promise<VoidAuthorizationResult> {
+  if (
+    !AUTHORIZE_SANDBOX_LOGIN_ID ||
+    !AUTHORIZE_SANDBOX_TRANSACTION_KEY
+  ) {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net sandbox credentials are not configured.",
+      uncertain: false,
+    };
+  }
+
+  try {
+    const response =
+      await fetch(
+        AUTHORIZE_SANDBOX_URL,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            createTransactionRequest: {
+              merchantAuthentication: {
+                name:
+                  AUTHORIZE_SANDBOX_LOGIN_ID,
+                transactionKey:
+                  AUTHORIZE_SANDBOX_TRANSACTION_KEY,
+              },
+              transactionRequest: {
+                transactionType:
+                  "voidTransaction",
+                refTransId:
+                  transactionId,
+              },
+            },
+          }),
+          signal:
+            AbortSignal.timeout(
+              15_000
+            ),
+        }
+      );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        message:
+          "Authorize.Net did not confirm the void.",
+        uncertain: true,
+      };
+    }
+
+    const data =
+      await response.json();
+
+    const transactionResponse =
+      data?.transactionResponse;
+
+    const responseCode =
+      String(
+        transactionResponse
+          ?.responseCode || ""
+      );
+
+    const voidTransactionId =
+      String(
+        transactionResponse
+          ?.transId ||
+        transactionId
+      );
+
+    const message =
+      String(
+        transactionResponse
+          ?.messages?.[0]
+          ?.description ||
+        transactionResponse
+          ?.errors?.[0]
+          ?.errorText ||
+        data
+          ?.messages?.message?.[0]
+          ?.text ||
+        "Authorize.Net did not confirm the void."
+      );
+
+    if (responseCode === "1") {
+      return {
+        ok: true,
+        transactionId:
+          voidTransactionId,
+      };
+    }
+
+    return {
+      ok: false,
+      message,
+      uncertain: false,
+    };
+  } catch {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net did not confirm the void.",
+      uncertain: true,
+    };
+  }
+}
+
+===== BOOKED / COMPLETE / CAPTURE sections =====
+
+  app\api\authorize\auth-only\route.ts:623:            lookupResult.ok &&
+  app\api\authorize\auth-only\route.ts:624:            lookupResult.result ===
+  app\api\authorize\auth-only\route.ts:625:            "FOUND"
+  app\api\authorize\auth-only\route.ts:626:          ) {
+  app\api\authorize\auth-only\route.ts:627:            await updateBookingLedgerRecord({
+  app\api\authorize\auth-only\route.ts:628:              checkoutId:
+  app\api\authorize\auth-only\route.ts:629:                session.checkoutId,
+  app\api\authorize\auth-only\route.ts:630:
+> app\api\authorize\auth-only\route.ts:631:              bookeoBookingId:
+  app\api\authorize\auth-only\route.ts:632:                lookupResult.bookingId,
+  app\api\authorize\auth-only\route.ts:633:
+  app\api\authorize\auth-only\route.ts:634:              status:
+> app\api\authorize\auth-only\route.ts:635:                BOOKING_STATES.BOOKED,
+  app\api\authorize\auth-only\route.ts:636:            });
+  app\api\authorize\auth-only\route.ts:637:
+  app\api\authorize\auth-only\route.ts:638:            return NextResponse.json({
+  app\api\authorize\auth-only\route.ts:639:              authorized: true,
+  app\api\authorize\auth-only\route.ts:640:
+  app\api\authorize\auth-only\route.ts:641:              transactionId,
+  app\api\authorize\auth-only\route.ts:642:
+> app\api\authorize\auth-only\route.ts:643:              booked: true,
+  app\api\authorize\auth-only\route.ts:644:
+  app\api\authorize\auth-only\route.ts:645:              recoveredByLookup:
+  app\api\authorize\auth-only\route.ts:646:                true,
+  app\api\authorize\auth-only\route.ts:647:
+> app\api\authorize\auth-only\route.ts:648:              bookeoBookingId:
+  app\api\authorize\auth-only\route.ts:649:                lookupResult.bookingId,
+  app\api\authorize\auth-only\route.ts:650:            });
+  app\api\authorize\auth-only\route.ts:651:          }
+  app\api\authorize\auth-only\route.ts:652:
+  app\api\authorize\auth-only\route.ts:653:          /*
+  app\api\authorize\auth-only\route.ts:654:           * More than one booking with the same
+  app\api\authorize\auth-only\route.ts:655:           * unique checkout ID should never occur.
+  app\api\authorize\auth-only\route.ts:656:           *
+  app\api\authorize\auth-only\route.ts:657:           * Stop automation.
+  app\api\authorize\auth-only\route.ts:658:           */
+  app\api\authorize\auth-only\route.ts:659:          if (
+  app\api\authorize\auth-only\route.ts:660:            lookupResult.ok &&
+  app\api\authorize\auth-only\route.ts:888:        /*
+  app\api\authorize\auth-only\route.ts:889:         * Second CREATE positively succeeded.
+  app\api\authorize\auth-only\route.ts:890:         */
+  app\api\authorize\auth-only\route.ts:891:        if (secondCreateResult.ok) {
+  app\api\authorize\auth-only\route.ts:892:          await updateBookingLedgerRecord({
+  app\api\authorize\auth-only\route.ts:893:            checkoutId:
+  app\api\authorize\auth-only\route.ts:894:              session.checkoutId,
+  app\api\authorize\auth-only\route.ts:895:
+> app\api\authorize\auth-only\route.ts:896:            bookeoBookingId:
+  app\api\authorize\auth-only\route.ts:897:              secondCreateResult.bookingId,
+  app\api\authorize\auth-only\route.ts:898:
+  app\api\authorize\auth-only\route.ts:899:            status:
+> app\api\authorize\auth-only\route.ts:900:              BOOKING_STATES.BOOKED,
+  app\api\authorize\auth-only\route.ts:901:
+  app\api\authorize\auth-only\route.ts:902:            errorCode:
+  app\api\authorize\auth-only\route.ts:903:              null,
+  app\api\authorize\auth-only\route.ts:904:
+  app\api\authorize\auth-only\route.ts:905:            errorMessage:
+  app\api\authorize\auth-only\route.ts:906:              null,
+  app\api\authorize\auth-only\route.ts:907:          });
+  app\api\authorize\auth-only\route.ts:908:
+  app\api\authorize\auth-only\route.ts:909:          return NextResponse.json({
+  app\api\authorize\auth-only\route.ts:910:            authorized: true,
+  app\api\authorize\auth-only\route.ts:911:
+  app\api\authorize\auth-only\route.ts:912:            transactionId,
+  app\api\authorize\auth-only\route.ts:913:
+> app\api\authorize\auth-only\route.ts:914:            booked: true,
+  app\api\authorize\auth-only\route.ts:915:
+  app\api\authorize\auth-only\route.ts:916:            recoveredBySecondCreate:
+  app\api\authorize\auth-only\route.ts:917:              true,
+  app\api\authorize\auth-only\route.ts:918:
+> app\api\authorize\auth-only\route.ts:919:            bookeoBookingId:
+  app\api\authorize\auth-only\route.ts:920:              secondCreateResult.bookingId,
+  app\api\authorize\auth-only\route.ts:921:          });
+  app\api\authorize\auth-only\route.ts:922:        }
+  app\api\authorize\auth-only\route.ts:923:
+  app\api\authorize\auth-only\route.ts:924:        /*
+  app\api\authorize\auth-only\route.ts:925:         * Second CREATE was explicitly rejected.
+  app\api\authorize\auth-only\route.ts:926:         * No booking was created, so void.
+  app\api\authorize\auth-only\route.ts:927:         */
+  app\api\authorize\auth-only\route.ts:928:        if (
+  app\api\authorize\auth-only\route.ts:929:          secondCreateResult.reason ===
+  app\api\authorize\auth-only\route.ts:930:          "REJECTED"
+  app\api\authorize\auth-only\route.ts:931:        ) {
+  app\api\authorize\auth-only\route.ts:1011:          finalLookup.ok &&
+  app\api\authorize\auth-only\route.ts:1012:          finalLookup.result ===
+  app\api\authorize\auth-only\route.ts:1013:          "FOUND"
+  app\api\authorize\auth-only\route.ts:1014:        ) {
+  app\api\authorize\auth-only\route.ts:1015:          await updateBookingLedgerRecord({
+  app\api\authorize\auth-only\route.ts:1016:            checkoutId:
+  app\api\authorize\auth-only\route.ts:1017:              session.checkoutId,
+  app\api\authorize\auth-only\route.ts:1018:
+> app\api\authorize\auth-only\route.ts:1019:            bookeoBookingId:
+  app\api\authorize\auth-only\route.ts:1020:              finalLookup.bookingId,
+  app\api\authorize\auth-only\route.ts:1021:
+  app\api\authorize\auth-only\route.ts:1022:            status:
+> app\api\authorize\auth-only\route.ts:1023:              BOOKING_STATES.BOOKED,
+  app\api\authorize\auth-only\route.ts:1024:
+  app\api\authorize\auth-only\route.ts:1025:            errorCode:
+  app\api\authorize\auth-only\route.ts:1026:              null,
+  app\api\authorize\auth-only\route.ts:1027:
+  app\api\authorize\auth-only\route.ts:1028:            errorMessage:
+  app\api\authorize\auth-only\route.ts:1029:              null,
+  app\api\authorize\auth-only\route.ts:1030:          });
+  app\api\authorize\auth-only\route.ts:1031:
+  app\api\authorize\auth-only\route.ts:1032:          return NextResponse.json({
+  app\api\authorize\auth-only\route.ts:1033:            authorized: true,
+  app\api\authorize\auth-only\route.ts:1034:
+  app\api\authorize\auth-only\route.ts:1035:            transactionId,
+  app\api\authorize\auth-only\route.ts:1036:
+> app\api\authorize\auth-only\route.ts:1037:            booked: true,
+  app\api\authorize\auth-only\route.ts:1038:
+  app\api\authorize\auth-only\route.ts:1039:            recoveredByFinalLookup:
+  app\api\authorize\auth-only\route.ts:1040:              true,
+  app\api\authorize\auth-only\route.ts:1041:
+> app\api\authorize\auth-only\route.ts:1042:            bookeoBookingId:
+  app\api\authorize\auth-only\route.ts:1043:              finalLookup.bookingId,
+  app\api\authorize\auth-only\route.ts:1044:          });
+  app\api\authorize\auth-only\route.ts:1045:        }
+  app\api\authorize\auth-only\route.ts:1046:
+  app\api\authorize\auth-only\route.ts:1047:        /*
+  app\api\authorize\auth-only\route.ts:1048:         * Multiple bookings with our unique
+  app\api\authorize\auth-only\route.ts:1049:         * checkout ID means automation stops.
+  app\api\authorize\auth-only\route.ts:1050:         */
+  app\api\authorize\auth-only\route.ts:1051:        if (
+  app\api\authorize\auth-only\route.ts:1052:          finalLookup.ok &&
+  app\api\authorize\auth-only\route.ts:1053:          finalLookup.result ===
+  app\api\authorize\auth-only\route.ts:1054:          "AMBIGUOUS"
+  app\api\authorize\auth-only\route.ts:1194:      /*
+  app\api\authorize\auth-only\route.ts:1195:       * Bookeo positively confirmed the
+  app\api\authorize\auth-only\route.ts:1196:       * booking and returned bookingNumber.
+  app\api\authorize\auth-only\route.ts:1197:       */
+  app\api\authorize\auth-only\route.ts:1198:      await updateBookingLedgerRecord({
+  app\api\authorize\auth-only\route.ts:1199:        checkoutId:
+  app\api\authorize\auth-only\route.ts:1200:          session.checkoutId,
+  app\api\authorize\auth-only\route.ts:1201:
+> app\api\authorize\auth-only\route.ts:1202:        bookeoBookingId:
+  app\api\authorize\auth-only\route.ts:1203:          finalBookeoResult.bookingId,
+  app\api\authorize\auth-only\route.ts:1204:
+  app\api\authorize\auth-only\route.ts:1205:        status:
+> app\api\authorize\auth-only\route.ts:1206:          BOOKING_STATES.BOOKED,
+  app\api\authorize\auth-only\route.ts:1207:      });
+  app\api\authorize\auth-only\route.ts:1208:
+  app\api\authorize\auth-only\route.ts:1209:      return NextResponse.json({
+  app\api\authorize\auth-only\route.ts:1210:        authorized: true,
+  app\api\authorize\auth-only\route.ts:1211:
+  app\api\authorize\auth-only\route.ts:1212:        transactionId,
+  app\api\authorize\auth-only\route.ts:1213:
+  app\api\authorize\auth-only\route.ts:1214:        postAuthHoldValid:
+  app\api\authorize\auth-only\route.ts:1215:          true,
+  app\api\authorize\auth-only\route.ts:1216:
+  app\api\authorize\auth-only\route.ts:1217:        holdReplaced:
+  app\api\authorize\auth-only\route.ts:1218:          postAuthHoldResult.replaced,
+  app\api\authorize\auth-only\route.ts:1219:
+> app\api\authorize\auth-only\route.ts:1220:        booked:
+  app\api\authorize\auth-only\route.ts:1221:          true,
+  app\api\authorize\auth-only\route.ts:1222:
+> app\api\authorize\auth-only\route.ts:1223:        bookeoBookingId:
+  app\api\authorize\auth-only\route.ts:1224:          finalBookeoResult.bookingId,
+  app\api\authorize\auth-only\route.ts:1225:      });
+  app\api\authorize\auth-only\route.ts:1226:    }
+  app\api\authorize\auth-only\route.ts:1227:
+  app\api\authorize\auth-only\route.ts:1228:    /*
+  app\api\authorize\auth-only\route.ts:1229:     * responseCode 2 or 3 is an explicit
+  app\api\authorize\auth-only\route.ts:1230:     * decline/error result from Authorize.Net.
+  app\api\authorize\auth-only\route.ts:1231:     *
+  app\api\authorize\auth-only\route.ts:1232:     * No Bookeo booking is created.
+  app\api\authorize\auth-only\route.ts:1233:     */
+  app\api\authorize\auth-only\route.ts:1234:    if (
+  app\api\authorize\auth-only\route.ts:1235:      responseCode === "2" ||
+
+

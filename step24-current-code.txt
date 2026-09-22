@@ -1,0 +1,1919 @@
+﻿===== app/lib/authorizeSandbox.ts =====
+import "server-only";
+
+const AUTHORIZE_SANDBOX_LOGIN_ID =
+  process.env.AUTHORIZE_SANDBOX_LOGIN_ID;
+
+const AUTHORIZE_SANDBOX_TRANSACTION_KEY =
+  process.env.AUTHORIZE_SANDBOX_TRANSACTION_KEY;
+
+const AUTHORIZE_SANDBOX_URL =
+  "https://apitest.authorize.net/xml/v1/request.api";
+
+export type VoidAuthorizationResult =
+  | {
+      ok: true;
+      transactionId: string;
+    }
+  | {
+      ok: false;
+      message: string;
+      uncertain: boolean;
+    };
+
+export async function voidSandboxAuthorization(
+  transactionId: string
+): Promise<VoidAuthorizationResult> {
+  if (
+    !AUTHORIZE_SANDBOX_LOGIN_ID ||
+    !AUTHORIZE_SANDBOX_TRANSACTION_KEY
+  ) {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net sandbox credentials are not configured.",
+      uncertain: false,
+    };
+  }
+
+  try {
+    const response =
+      await fetch(
+        AUTHORIZE_SANDBOX_URL,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            createTransactionRequest: {
+              merchantAuthentication: {
+                name:
+                  AUTHORIZE_SANDBOX_LOGIN_ID,
+                transactionKey:
+                  AUTHORIZE_SANDBOX_TRANSACTION_KEY,
+              },
+              transactionRequest: {
+                transactionType:
+                  "voidTransaction",
+                refTransId:
+                  transactionId,
+              },
+            },
+          }),
+          signal:
+            AbortSignal.timeout(
+              15_000
+            ),
+        }
+      );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        message:
+          "Authorize.Net did not confirm the void.",
+        uncertain: true,
+      };
+    }
+
+    const data =
+      await response.json();
+
+    const transactionResponse =
+      data?.transactionResponse;
+
+    const responseCode =
+      String(
+        transactionResponse
+          ?.responseCode || ""
+      );
+
+    const voidTransactionId =
+      String(
+        transactionResponse
+          ?.transId ||
+        transactionId
+      );
+
+    const message =
+      String(
+        transactionResponse
+          ?.messages?.[0]
+          ?.description ||
+        transactionResponse
+          ?.errors?.[0]
+          ?.errorText ||
+        data
+          ?.messages?.message?.[0]
+          ?.text ||
+        "Authorize.Net did not confirm the void."
+      );
+
+    if (responseCode === "1") {
+      return {
+        ok: true,
+        transactionId:
+          voidTransactionId,
+      };
+    }
+
+    return {
+      ok: false,
+      message,
+      uncertain: false,
+    };
+  } catch {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net did not confirm the void.",
+      uncertain: true,
+    };
+  }
+}
+
+export type CaptureAuthorizationResult =
+  | {
+      ok: true;
+      transactionId: string;
+    }
+  | {
+      ok: false;
+      message: string;
+      uncertain: boolean;
+    };
+
+export async function captureSandboxAuthorization(
+  transactionId: string,
+  amount: number
+): Promise<CaptureAuthorizationResult> {
+  if (
+    !AUTHORIZE_SANDBOX_LOGIN_ID ||
+    !AUTHORIZE_SANDBOX_TRANSACTION_KEY
+  ) {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net sandbox credentials are not configured.",
+      uncertain: false,
+    };
+  }
+
+  try {
+    const response =
+      await fetch(
+        AUTHORIZE_SANDBOX_URL,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            createTransactionRequest: {
+              merchantAuthentication: {
+                name:
+                  AUTHORIZE_SANDBOX_LOGIN_ID,
+                transactionKey:
+                  AUTHORIZE_SANDBOX_TRANSACTION_KEY,
+              },
+              transactionRequest: {
+                transactionType:
+                  "priorAuthCaptureTransaction",
+                amount:
+                  amount.toFixed(2),
+                refTransId:
+                  transactionId,
+              },
+            },
+          }),
+          signal:
+            AbortSignal.timeout(
+              15_000
+            ),
+        }
+      );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        message:
+          "Authorize.Net did not return a confirmed capture result.",
+        uncertain: true,
+      };
+    }
+
+    const data =
+      await response.json();
+
+    const transactionResponse =
+      data?.transactionResponse;
+
+    const responseCode =
+      String(
+        transactionResponse
+          ?.responseCode || ""
+      );
+
+    const captureTransactionId =
+      String(
+        transactionResponse
+          ?.transId ||
+        transactionId
+      );
+
+    const message =
+      String(
+        transactionResponse
+          ?.messages?.[0]
+          ?.description ||
+        transactionResponse
+          ?.errors?.[0]
+          ?.errorText ||
+        data
+          ?.messages?.message?.[0]
+          ?.text ||
+        "Authorize.Net did not confirm the capture."
+      );
+
+    if (responseCode === "1") {
+      return {
+        ok: true,
+        transactionId:
+          captureTransactionId,
+      };
+    }
+
+    return {
+      ok: false,
+      message,
+      uncertain: false,
+    };
+  } catch {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net did not return a confirmed capture result.",
+      uncertain: true,
+    };
+  }
+}
+
+===== app/lib/bookingLedger.ts =====
+import "server-only";
+import { neon } from "@neondatabase/serverless";
+import { BOOKING_STATES } from "./bookingState";
+
+function getSql() {
+  const databaseUrl = process.env.DATABASE_URL;
+
+  if (!databaseUrl) {
+    throw new Error(
+      "DATABASE_URL is not configured."
+    );
+  }
+
+  return neon(databaseUrl);
+}
+
+export type BookingLedgerRecord = {
+  checkoutId: string;
+  holdId: string | null;
+  authorizeTransactionId: string | null;
+  bookeoBookingId: string | null;
+  status: string;
+  errorCode: string | null;
+  errorMessage: string | null;
+  errorData: unknown;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function createBookingLedgerRecord({
+  checkoutId,
+  holdId,
+  status,
+}: {
+  checkoutId: string;
+  holdId?: string | null;
+  status: string;
+}) {
+  const sql = getSql();
+
+  const rows = await sql`
+    INSERT INTO booking_ledger (
+      checkout_id,
+      hold_id,
+      status
+    )
+    VALUES (
+      ${checkoutId},
+      ${holdId ?? null},
+      ${status}
+    )
+    RETURNING *
+  `;
+
+  return rows[0];
+}
+
+export async function getBookingLedgerRecord(
+  checkoutId: string
+) {
+  const sql = getSql();
+
+  const rows = await sql`
+    SELECT *
+    FROM booking_ledger
+    WHERE checkout_id = ${checkoutId}
+    LIMIT 1
+  `;
+
+  return rows[0] ?? null;
+}
+
+export async function updateBookingLedgerRecord({
+  checkoutId,
+  holdId,
+  authorizeTransactionId,
+  bookeoBookingId,
+  status,
+  errorCode,
+  errorMessage,
+  errorData,
+}: {
+  checkoutId: string;
+  holdId?: string | null;
+  authorizeTransactionId?: string | null;
+  bookeoBookingId?: string | null;
+  status?: string;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  errorData?: unknown;
+}) {
+  const sql = getSql();
+
+  const rows = await sql`
+    UPDATE booking_ledger
+    SET
+      hold_id =
+        COALESCE(
+          ${holdId ?? null},
+          hold_id
+        ),
+      authorize_transaction_id =
+        COALESCE(
+          ${authorizeTransactionId ?? null},
+          authorize_transaction_id
+        ),
+      bookeo_booking_id =
+        COALESCE(
+          ${bookeoBookingId ?? null},
+          bookeo_booking_id
+        ),
+      status =
+        COALESCE(
+          ${status ?? null},
+          status
+        ),
+      error_code =
+        COALESCE(
+          ${errorCode ?? null},
+          error_code
+        ),
+      error_message =
+        COALESCE(
+          ${errorMessage ?? null},
+          error_message
+        ),
+      error_data =
+        COALESCE(
+          ${errorData === undefined
+            ? null
+            : JSON.stringify(errorData)}::jsonb,
+          error_data
+        ),
+      updated_at = NOW()
+    WHERE checkout_id = ${checkoutId}
+    RETURNING *
+  `;
+
+  return rows[0] ?? null;
+}
+export async function claimCheckoutForAuthorization(
+  checkoutId: string
+) {
+  const sql = getSql();
+
+  const rows = await sql`
+    UPDATE booking_ledger
+    SET
+      status = ${BOOKING_STATES.AUTHORIZING},
+      updated_at = NOW()
+    WHERE
+      checkout_id = ${checkoutId}
+      AND status = ${BOOKING_STATES.HOLD_CREATED}
+    RETURNING *
+  `;
+
+  return rows[0] ?? null;
+}
+
+===== app/lib/bookingState.ts =====
+export const BOOKING_STATES = {
+  HOLD_CREATED: "HOLD_CREATED",
+  AUTHORIZING: "AUTHORIZING",
+  AUTHORIZED: "AUTHORIZED",
+  BOOKED: "BOOKED",
+  CAPTURE_FAILED: "CAPTURE_FAILED",
+  COMPLETE: "COMPLETE",
+  FAILED: "FAILED",
+  VOIDED: "VOIDED",
+} as const;
+
+export type BookingState =
+  (typeof BOOKING_STATES)[keyof typeof BOOKING_STATES];
+
+const ALLOWED_TRANSITIONS: Record<
+  BookingState,
+  BookingState[]
+> = {
+  HOLD_CREATED: [
+    "AUTHORIZING",
+    "FAILED",
+  ],
+
+  AUTHORIZING: [
+    "AUTHORIZED",
+    "FAILED",
+  ],
+
+  AUTHORIZED: [
+    "BOOKED",
+    "FAILED",
+    "VOIDED",
+  ],
+
+  BOOKED: [
+    "COMPLETE",
+    "CAPTURE_FAILED",
+  ],
+
+  CAPTURE_FAILED: [
+    "COMPLETE",
+    "CAPTURE_FAILED",
+  ],
+
+  COMPLETE: [],
+
+  FAILED: [],
+
+  VOIDED: [],
+};
+
+export function canTransitionBookingState(
+  currentState: BookingState,
+  nextState: BookingState
+) {
+  return ALLOWED_TRANSITIONS[
+    currentState
+  ].includes(nextState);
+}
+
+export function assertBookingStateTransition(
+  currentState: BookingState,
+  nextState: BookingState
+) {
+  if (
+    !canTransitionBookingState(
+      currentState,
+      nextState
+    )
+  ) {
+    throw new Error(
+      `Invalid booking state transition: ${currentState} -> ${nextState}`
+    );
+  }
+}
+
+===== app/api/authorize/auth-only/route.ts =====
+import { NextRequest, NextResponse } from "next/server";
+import { Redis } from "@upstash/redis";
+import {
+  type BookingSession,
+  isValidBookingSessionId,
+} from "@/app/lib/booking";
+import {
+  claimCheckoutForAuthorization,
+  updateBookingLedgerRecord,
+} from "@/app/lib/bookingLedger";
+import {
+  BOOKING_STATES,
+} from "@/app/lib/bookingState";
+import {
+  ensurePreAuthHold,
+} from "@/app/lib/preAuthHold";
+import {
+  captureSandboxAuthorization,
+  voidSandboxAuthorization,
+} from "@/app/lib/authorizeSandbox";
+import {
+  createFinalBookeoBooking,
+} from "@/app/lib/finalBookeoBooking";
+import {
+  lookupFinalBookeoBooking,
+} from "@/app/lib/bookeoBookingLookup";
+
+const redis = Redis.fromEnv();
+
+const AUTHORIZE_SANDBOX_LOGIN_ID =
+  process.env.AUTHORIZE_SANDBOX_LOGIN_ID;
+
+const AUTHORIZE_SANDBOX_TRANSACTION_KEY =
+  process.env.AUTHORIZE_SANDBOX_TRANSACTION_KEY;
+
+const AUTHORIZE_SANDBOX_URL =
+  "https://apitest.authorize.net/xml/v1/request.api";
+
+async function captureBookedCheckout({
+  checkoutId,
+  transactionId,
+  amount,
+  bookeoBookingId,
+  responseData,
+}: {
+  checkoutId: string;
+  transactionId: string;
+  amount: number;
+  bookeoBookingId: string;
+  responseData: Record<string, unknown>;
+}) {
+  /*
+   * STEP 23:
+   * Bookeo is positively BOOKED.
+   *
+   * Capture the existing Authorize.Net
+   * authorization. Never create another
+   * authorization here.
+   */
+  const captureResult =
+    await captureSandboxAuthorization(
+      transactionId,
+      amount
+    );
+
+  if (captureResult.ok) {
+    await updateBookingLedgerRecord({
+      checkoutId,
+
+      status:
+        BOOKING_STATES.COMPLETE,
+    });
+
+    return NextResponse.json({
+      ...responseData,
+
+      authorized: true,
+      booked: true,
+      captured: true,
+      complete: true,
+
+      transactionId:
+        captureResult.transactionId,
+
+      bookeoBookingId,
+    });
+  }
+
+  /*
+   * Whether Authorize.Net explicitly rejected
+   * capture or the result is uncertain, the
+   * Bookeo booking already exists.
+   *
+   * Never void/delete the Bookeo booking here.
+   * Step 24 will retry/reconcile capture.
+   */
+  await updateBookingLedgerRecord({
+    checkoutId,
+
+    status:
+      BOOKING_STATES.CAPTURE_FAILED,
+
+    errorCode:
+      captureResult.uncertain
+        ? "CAPTURE_UNCERTAIN"
+        : "CAPTURE_REJECTED",
+
+    errorMessage:
+      captureResult.message,
+
+    errorData: {
+      authorizeTransactionId:
+        transactionId,
+
+      bookeoBookingId,
+
+      uncertain:
+        captureResult.uncertain,
+    },
+  });
+
+  return NextResponse.json(
+    {
+      ...responseData,
+
+      authorized: true,
+      booked: true,
+      captured: false,
+      captureFailed: true,
+      recoveryRequired: true,
+
+      transactionId,
+      bookeoBookingId,
+
+      error:
+        "The Bookeo booking was created, but payment capture requires recovery.",
+    },
+    {
+      status: 502,
+    }
+  );
+}
+
+type OpaqueData = {
+  dataDescriptor: string;
+  dataValue: string;
+};
+
+export async function POST(
+  request: NextRequest
+) {
+  try {
+    if (
+      !AUTHORIZE_SANDBOX_LOGIN_ID ||
+      !AUTHORIZE_SANDBOX_TRANSACTION_KEY
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Authorize.Net sandbox credentials are not configured.",
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    const body =
+      await request.json();
+
+    const sessionId =
+      String(body.sessionId || "");
+
+    const opaqueData =
+      body.opaqueData as OpaqueData | undefined;
+
+    if (!isValidBookingSessionId(sessionId)) {
+      return NextResponse.json(
+        {
+          error:
+            "The booking session is invalid or expired.",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    if (
+      !opaqueData ||
+      opaqueData.dataDescriptor !==
+      "COMMON.ACCEPT.INAPP.PAYMENT" ||
+      !opaqueData.dataValue
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "The secure payment token is invalid.",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    let session =
+      await redis.get<BookingSession>(
+        `booking-session:${sessionId}`
+      );
+
+    if (!session) {
+      return NextResponse.json(
+        {
+          error:
+            "The booking session could not be found or has expired.",
+        },
+        {
+          status: 410,
+        }
+      );
+    }
+
+    /*
+     * STEP 15:
+     * Verify the current Bookeo hold before any
+     * Authorize.Net authorization is attempted.
+     */
+    const preAuthHoldResult =
+      await ensurePreAuthHold(session);
+
+    if (!preAuthHoldResult.ok) {
+      if (
+        preAuthHoldResult.reason ===
+        "UNAVAILABLE"
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Sorry, those seats are no longer available.",
+            unavailable: true,
+          },
+          {
+            status: 409,
+          }
+        );
+      }
+
+      return NextResponse.json(
+        {
+          error:
+            "Bookeo could not verify the booking hold. Please try again.",
+        },
+        {
+          status: 502,
+        }
+      );
+    }
+
+    session =
+      preAuthHoldResult.session;
+
+    /*
+     * STEP 17:
+     * Atomic server-side payment-attempt lock.
+     *
+     * Exactly one request can move this checkout
+     * from HOLD_CREATED to AUTHORIZING.
+     */
+    const claimedCheckout =
+      await claimCheckoutForAuthorization(
+        session.checkoutId
+      );
+
+    if (!claimedCheckout) {
+      return NextResponse.json(
+        {
+          error:
+            "This payment attempt has already been started.",
+        },
+        {
+          status: 409,
+        }
+      );
+    }
+
+    const amount =
+      Number(session.total);
+
+    if (
+      !Number.isFinite(amount) ||
+      amount <= 0
+    ) {
+      await updateBookingLedgerRecord({
+        checkoutId:
+          session.checkoutId,
+        status:
+          BOOKING_STATES.FAILED,
+        errorCode:
+          "INVALID_AMOUNT",
+        errorMessage:
+          "Trusted booking amount was invalid.",
+      });
+
+      return NextResponse.json(
+        {
+          error:
+            "The booking total is invalid.",
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    /*
+     * STEP 18:
+     * AUTH-ONLY.
+     *
+     * No capture occurs here.
+     */
+    const authorizeRequest = {
+      createTransactionRequest: {
+        merchantAuthentication: {
+          name:
+            AUTHORIZE_SANDBOX_LOGIN_ID,
+          transactionKey:
+            AUTHORIZE_SANDBOX_TRANSACTION_KEY,
+        },
+
+        refId:
+          session.checkoutId.slice(
+            0,
+            20
+          ),
+
+        transactionRequest: {
+          transactionType:
+            "authOnlyTransaction",
+
+          amount:
+            amount.toFixed(2),
+
+          payment: {
+            opaqueData: {
+              dataDescriptor:
+                opaqueData.dataDescriptor,
+              dataValue:
+                opaqueData.dataValue,
+            },
+          },
+        },
+      },
+    };
+
+    const authorizeResponse =
+      await fetch(
+        AUTHORIZE_SANDBOX_URL,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify(
+            authorizeRequest
+          ),
+          signal:
+            AbortSignal.timeout(
+              15_000
+            ),
+        }
+      );
+
+    if (!authorizeResponse.ok) {
+      /*
+       * We do NOT automatically retry here.
+       *
+       * Once AUTH-ONLY was sent, an uncertain
+       * network result must not cause a second
+       * authorization attempt.
+       */
+      return NextResponse.json(
+        {
+          error:
+            "Authorize.Net did not return a confirmed result.",
+          uncertain: true,
+        },
+        {
+          status: 502,
+        }
+      );
+    }
+
+    const authorizeData =
+      await authorizeResponse.json();
+
+    const transactionResponse =
+      authorizeData
+        ?.transactionResponse;
+
+    const responseCode =
+      String(
+        transactionResponse
+          ?.responseCode || ""
+      );
+
+    const transactionId =
+      String(
+        transactionResponse
+          ?.transId || ""
+      );
+
+    const transactionMessage =
+      String(
+        transactionResponse
+          ?.messages?.[0]
+          ?.description ||
+        transactionResponse
+          ?.errors?.[0]
+          ?.errorText ||
+        authorizeData
+          ?.messages?.message?.[0]
+          ?.text ||
+        ""
+      );
+
+    /*
+     * responseCode 1 = approved.
+     */
+    if (
+      responseCode === "1" &&
+      transactionId &&
+      transactionId !== "0"
+    ) {
+      await updateBookingLedgerRecord({
+        checkoutId:
+          session.checkoutId,
+        authorizeTransactionId:
+          transactionId,
+        status:
+          BOOKING_STATES.AUTHORIZED,
+      });
+
+      /*
+       * STEP 19:
+       * Authorization succeeded.
+       *
+       * Check the Bookeo hold again before
+       * attempting final Bookeo creation.
+       */
+      const postAuthHoldResult =
+        await ensurePreAuthHold(
+          session
+        );
+
+      if (!postAuthHoldResult.ok) {
+        /*
+         * Bookeo explicitly says the seats
+         * are no longer available.
+         *
+         * The authorization must be voided.
+         */
+        if (
+          postAuthHoldResult.reason ===
+          "UNAVAILABLE"
+        ) {
+          const voidResult =
+            await voidSandboxAuthorization(
+              transactionId
+            );
+
+          if (voidResult.ok) {
+            await updateBookingLedgerRecord({
+              checkoutId:
+                session.checkoutId,
+              status:
+                BOOKING_STATES.VOIDED,
+              errorCode:
+                "POST_AUTH_HOLD_UNAVAILABLE",
+              errorMessage:
+                "Bookeo seats became unavailable after authorization.",
+            });
+
+            return NextResponse.json(
+              {
+                authorized: false,
+                voided: true,
+                unavailable: true,
+                error:
+                  "Sorry, those seats are no longer available. The card authorization was voided.",
+              },
+              {
+                status: 409,
+              }
+            );
+          }
+
+          /*
+           * We know the seats are unavailable,
+           * but we could not confirm the void.
+           *
+           * Keep the ledger AUTHORIZED so
+           * recovery can deal with the real
+           * gateway state.
+           */
+          await updateBookingLedgerRecord({
+            checkoutId:
+              session.checkoutId,
+            errorCode:
+              "POST_AUTH_VOID_NOT_CONFIRMED",
+            errorMessage:
+              voidResult.message,
+            errorData: {
+              authorizeTransactionId:
+                transactionId,
+              uncertain:
+                voidResult.uncertain,
+            },
+          });
+
+          return NextResponse.json(
+            {
+              authorized: true,
+              recoveryRequired: true,
+              error:
+                "The seats are no longer available, and the payment authorization requires recovery.",
+            },
+            {
+              status: 502,
+            }
+          );
+        }
+
+        /*
+         * Bookeo did not give us a definitive
+         * availability result.
+         *
+         * Do NOT void and do NOT authorize again.
+         * Preserve AUTHORIZED for recovery.
+         */
+        await updateBookingLedgerRecord({
+          checkoutId:
+            session.checkoutId,
+          errorCode:
+            "POST_AUTH_BOOKEO_ERROR",
+          errorMessage:
+            "Bookeo could not confirm the hold after authorization.",
+          errorData: {
+            authorizeTransactionId:
+              transactionId,
+          },
+        });
+
+        return NextResponse.json(
+          {
+            authorized: true,
+            recoveryRequired: true,
+            error:
+              "The card was authorized, but the booking hold could not be confirmed.",
+          },
+          {
+            status: 502,
+          }
+        );
+      }
+
+      /*
+       * The hold is valid, or a replacement
+       * hold was successfully created.
+       */
+      session =
+        postAuthHoldResult.session;
+
+      /*
+       * STEP 20:
+       * Create the final Bookeo booking from
+       * the current validated hold.
+       *
+       * Payment is still AUTH-ONLY here.
+       * Capture happens later.
+       */
+      const finalBookeoResult =
+        await createFinalBookeoBooking(
+          session,
+          transactionId
+        );
+
+      if (!finalBookeoResult.ok) {
+        /*
+         * A definite Bookeo rejection means
+         * no booking was created.
+         *
+         * Void the card authorization.
+         */
+        if (
+          finalBookeoResult.reason ===
+          "REJECTED"
+        ) {
+          const voidResult =
+            await voidSandboxAuthorization(
+              transactionId
+            );
+
+          if (voidResult.ok) {
+            await updateBookingLedgerRecord({
+              checkoutId:
+                session.checkoutId,
+
+              status:
+                BOOKING_STATES.VOIDED,
+
+              errorCode:
+                "BOOKEO_FINALIZE_REJECTED",
+
+              errorMessage:
+                finalBookeoResult.message,
+
+              errorData: {
+                bookeoStatus:
+                  finalBookeoResult.status,
+
+                bookeoData:
+                  finalBookeoResult.data,
+              },
+            });
+
+            return NextResponse.json(
+              {
+                authorized: false,
+                voided: true,
+
+                error:
+                  "Bookeo could not create the booking. The card authorization was voided.",
+              },
+              {
+                status: 502,
+              }
+            );
+          }
+
+          /*
+           * Bookeo definitely rejected,
+           * but the void was not confirmed.
+           *
+           * Preserve AUTHORIZED for recovery.
+           */
+          await updateBookingLedgerRecord({
+            checkoutId:
+              session.checkoutId,
+
+            errorCode:
+              "BOOKEO_REJECTED_VOID_NOT_CONFIRMED",
+
+            errorMessage:
+              voidResult.message,
+
+            errorData: {
+              authorizeTransactionId:
+                transactionId,
+
+              bookeoStatus:
+                finalBookeoResult.status,
+
+              voidUncertain:
+                voidResult.uncertain,
+            },
+          });
+
+          return NextResponse.json(
+            {
+              authorized: true,
+              recoveryRequired: true,
+
+              error:
+                "Bookeo rejected the booking, and the authorization void requires recovery.",
+            },
+            {
+              status: 502,
+            }
+          );
+        }
+
+        /*
+         * Timeout, 5xx, network failure,
+         * or success without bookingNumber.
+         *
+         * Do NOT send another Bookeo CREATE.
+         * Step 21 will perform booking lookup.
+         */
+        /*
+ * STEP 21:
+ * The CREATE result was uncertain.
+ *
+ * Verify whether Bookeo actually created
+ * the booking before allowing any
+ * additional CREATE attempt.
+ */
+        let lastLookupError =
+          "";
+
+        for (
+          let lookupAttempt = 1;
+          lookupAttempt <= 3;
+          lookupAttempt++
+        ) {
+          if (lookupAttempt > 1) {
+            await new Promise(
+              (resolve) =>
+                setTimeout(
+                  resolve,
+                  lookupAttempt === 2
+                    ? 1000
+                    : 2000
+                )
+            );
+          }
+
+          const lookupResult =
+            await lookupFinalBookeoBooking(
+              session
+            );
+
+          /*
+           * Exactly one booking carrying our
+           * unique checkout externalRef exists.
+           */
+          if (
+            lookupResult.ok &&
+            lookupResult.result ===
+            "FOUND"
+          ) {
+            await updateBookingLedgerRecord({
+              checkoutId:
+                session.checkoutId,
+
+              bookeoBookingId:
+                lookupResult.bookingId,
+
+              status:
+                BOOKING_STATES.BOOKED,
+            });
+
+            return captureBookedCheckout({
+              checkoutId:
+                session.checkoutId,
+
+              transactionId,
+
+              amount,
+
+              bookeoBookingId:
+                lookupResult.bookingId,
+
+              responseData: {
+                recoveredByLookup:
+                  true,
+              },
+            });
+        }
+
+        /*
+         * More than one booking with the same
+         * unique checkout ID should never occur.
+         *
+         * Stop automation.
+         */
+        if (
+          lookupResult.ok &&
+          lookupResult.result ===
+          "AMBIGUOUS"
+        ) {
+          await updateBookingLedgerRecord({
+            checkoutId:
+              session.checkoutId,
+
+            errorCode:
+              "BOOKEO_LOOKUP_MULTIPLE_MATCHES",
+
+            errorMessage:
+              "Multiple Bookeo bookings matched the same checkout ID.",
+
+            errorData: {
+              authorizeTransactionId:
+                transactionId,
+
+              checkoutId:
+                session.checkoutId,
+
+              matches:
+                lookupResult.matches,
+            },
+          });
+
+          return NextResponse.json(
+            {
+              authorized: true,
+
+              recoveryRequired:
+                true,
+
+              error:
+                "Multiple Bookeo bookings matched this checkout. Automatic recovery stopped.",
+            },
+            {
+              status: 409,
+            }
+          );
+        }
+
+        /*
+         * Lookup itself failed.
+         *
+         * Do not interpret that as zero
+         * bookings and do not CREATE again.
+         */
+        if (!lookupResult.ok) {
+          lastLookupError =
+            lookupResult.message;
+
+          await updateBookingLedgerRecord({
+            checkoutId:
+              session.checkoutId,
+
+            errorCode:
+              "BOOKEO_LOOKUP_FAILED",
+
+            errorMessage:
+              lookupResult.message,
+
+            errorData: {
+              authorizeTransactionId:
+                transactionId,
+
+              checkoutId:
+                session.checkoutId,
+
+              lookupAttempt,
+            },
+          });
+
+          return NextResponse.json(
+            {
+              authorized: true,
+
+              recoveryRequired:
+                true,
+
+              error:
+                "Bookeo booking verification could not be completed.",
+            },
+            {
+              status: 502,
+            }
+          );
+        }
+
+        /*
+         * NO_MATCH:
+         * try again unless this was the
+         * third and final lookup.
+         */
+      }
+
+      /*
+* STEP 22:
+*
+* Three successful lookups found zero
+* Bookeo bookings.
+*
+* Before allowing exactly one controlled
+* second CREATE, verify that we still
+* have a valid Bookeo hold.
+*/
+      const retryHoldResult =
+        await ensurePreAuthHold(
+          session
+        );
+
+      if (!retryHoldResult.ok) {
+        /*
+         * We cannot safely issue the second
+         * CREATE without a confirmed hold.
+         */
+        if (
+          retryHoldResult.reason ===
+          "UNAVAILABLE"
+        ) {
+          const voidResult =
+            await voidSandboxAuthorization(
+              transactionId
+            );
+
+          if (voidResult.ok) {
+            await updateBookingLedgerRecord({
+              checkoutId:
+                session.checkoutId,
+
+              status:
+                BOOKING_STATES.VOIDED,
+
+              errorCode:
+                "SECOND_CREATE_HOLD_UNAVAILABLE",
+
+              errorMessage:
+                "No Bookeo booking was found and the hold could not be restored before the controlled second CREATE.",
+            });
+
+            return NextResponse.json(
+              {
+                authorized: false,
+                voided: true,
+                unavailable: true,
+
+                error:
+                  "The booking could not be confirmed and the card authorization was voided.",
+              },
+              {
+                status: 409,
+              }
+            );
+          }
+
+          await updateBookingLedgerRecord({
+            checkoutId:
+              session.checkoutId,
+
+            errorCode:
+              "SECOND_CREATE_HOLD_VOID_NOT_CONFIRMED",
+
+            errorMessage:
+              voidResult.message,
+
+            errorData: {
+              authorizeTransactionId:
+                transactionId,
+
+              uncertain:
+                voidResult.uncertain,
+            },
+          });
+
+          return NextResponse.json(
+            {
+              authorized: true,
+              recoveryRequired: true,
+
+              error:
+                "The booking could not be confirmed and the authorization void requires recovery.",
+            },
+            {
+              status: 502,
+            }
+          );
+        }
+
+        await updateBookingLedgerRecord({
+          checkoutId:
+            session.checkoutId,
+
+          errorCode:
+            "SECOND_CREATE_HOLD_CHECK_FAILED",
+
+          errorMessage:
+            "Bookeo could not confirm a valid hold before the controlled second CREATE.",
+        });
+
+        return NextResponse.json(
+          {
+            authorized: true,
+            recoveryRequired: true,
+
+            error:
+              "Bookeo could not safely verify the hold before recovery.",
+          },
+          {
+            status: 502,
+          }
+        );
+      }
+
+      session =
+        retryHoldResult.session;
+
+      /*
+       * Exactly ONE controlled second CREATE.
+       *
+       * There is no code path below this point
+       * that performs a third CREATE.
+       */
+      const secondCreateResult =
+        await createFinalBookeoBooking(
+          session,
+          transactionId
+        );
+
+      /*
+       * Second CREATE positively succeeded.
+       */
+      if (secondCreateResult.ok) {
+        await updateBookingLedgerRecord({
+          checkoutId:
+            session.checkoutId,
+
+          bookeoBookingId:
+            secondCreateResult.bookingId,
+
+          status:
+            BOOKING_STATES.BOOKED,
+
+          errorCode:
+            null,
+
+          errorMessage:
+            null,
+        });
+
+        return captureBookedCheckout({
+          checkoutId:
+            session.checkoutId,
+
+          transactionId,
+
+          amount,
+
+          bookeoBookingId:
+            secondCreateResult.bookingId,
+
+          responseData: {
+            recoveredBySecondCreate:
+              true,
+          },
+        });
+      }
+
+      /*
+       * Second CREATE was explicitly rejected.
+       * No booking was created, so void.
+       */
+      if (
+        secondCreateResult.reason ===
+        "REJECTED"
+      ) {
+        const voidResult =
+          await voidSandboxAuthorization(
+            transactionId
+          );
+
+        if (voidResult.ok) {
+          await updateBookingLedgerRecord({
+            checkoutId:
+              session.checkoutId,
+
+            status:
+              BOOKING_STATES.VOIDED,
+
+            errorCode:
+              "SECOND_CREATE_REJECTED",
+
+            errorMessage:
+              secondCreateResult.message,
+
+            errorData: {
+              bookeoStatus:
+                secondCreateResult.status,
+
+              bookeoData:
+                secondCreateResult.data,
+            },
+          });
+
+          return NextResponse.json(
+            {
+              authorized: false,
+              voided: true,
+
+              error:
+                "Bookeo rejected the recovery booking and the card authorization was voided.",
+            },
+            {
+              status: 502,
+            }
+          );
+        }
+
+        await updateBookingLedgerRecord({
+          checkoutId:
+            session.checkoutId,
+
+          errorCode:
+            "SECOND_CREATE_REJECTED_VOID_NOT_CONFIRMED",
+
+          errorMessage:
+            voidResult.message,
+        });
+
+        return NextResponse.json(
+          {
+            authorized: true,
+            recoveryRequired: true,
+
+            error:
+              "Bookeo rejected the recovery booking and the authorization void requires recovery.",
+          },
+          {
+            status: 502,
+          }
+        );
+      }
+
+      /*
+       * The second CREATE result itself was
+       * uncertain.
+       *
+       * Perform ONE final lookup.
+       */
+      const finalLookup =
+        await lookupFinalBookeoBooking(
+          session
+        );
+
+      if (
+        finalLookup.ok &&
+        finalLookup.result ===
+        "FOUND"
+      ) {
+        await updateBookingLedgerRecord({
+          checkoutId:
+            session.checkoutId,
+
+          bookeoBookingId:
+            finalLookup.bookingId,
+
+          status:
+            BOOKING_STATES.BOOKED,
+
+          errorCode:
+            null,
+
+          errorMessage:
+            null,
+        });
+
+        return captureBookedCheckout({
+          checkoutId:
+            session.checkoutId,
+
+          transactionId,
+
+          amount,
+
+          bookeoBookingId:
+            finalLookup.bookingId,
+
+          responseData: {
+            recoveredByFinalLookup:
+              true,
+          },
+        });
+      }
+
+      /*
+       * Multiple bookings with our unique
+       * checkout ID means automation stops.
+       */
+      if (
+        finalLookup.ok &&
+        finalLookup.result ===
+        "AMBIGUOUS"
+      ) {
+        await updateBookingLedgerRecord({
+          checkoutId:
+            session.checkoutId,
+
+          errorCode:
+            "FINAL_LOOKUP_MULTIPLE_MATCHES",
+
+          errorMessage:
+            "Multiple Bookeo bookings matched the checkout after the controlled second CREATE.",
+
+          errorData: {
+            authorizeTransactionId:
+              transactionId,
+
+            matches:
+              finalLookup.matches,
+          },
+        });
+
+        return NextResponse.json(
+          {
+            authorized: true,
+            recoveryRequired: true,
+
+            error:
+              "Multiple Bookeo bookings matched this checkout. Automatic recovery stopped.",
+          },
+          {
+            status: 409,
+          }
+        );
+      }
+
+      /*
+       * If the final lookup itself failed,
+       * preserve AUTHORIZED for manual recovery.
+       * We do not pretend this means no booking.
+       */
+      if (!finalLookup.ok) {
+        await updateBookingLedgerRecord({
+          checkoutId:
+            session.checkoutId,
+
+          errorCode:
+            "FINAL_LOOKUP_FAILED",
+
+          errorMessage:
+            finalLookup.message,
+        });
+
+        return NextResponse.json(
+          {
+            authorized: true,
+            recoveryRequired: true,
+
+            error:
+              "The final Bookeo verification could not be completed.",
+          },
+          {
+            status: 502,
+          }
+        );
+      }
+
+      /*
+       * Final lookup positively completed and
+       * found zero bookings.
+       *
+       * Both allowed CREATE attempts are now
+       * exhausted. Void the authorization.
+       */
+      const finalVoidResult =
+        await voidSandboxAuthorization(
+          transactionId
+        );
+
+      if (finalVoidResult.ok) {
+        await updateBookingLedgerRecord({
+          checkoutId:
+            session.checkoutId,
+
+          status:
+            BOOKING_STATES.VOIDED,
+
+          errorCode:
+            "SECOND_CREATE_FINAL_NO_MATCH",
+
+          errorMessage:
+            "Two Bookeo CREATE attempts were exhausted and the final verification found no booking.",
+        });
+
+        return NextResponse.json(
+          {
+            authorized: false,
+            voided: true,
+
+            error:
+              "The booking could not be confirmed and the card authorization was voided.",
+          },
+          {
+            status: 502,
+          }
+        );
+      }
+
+      await updateBookingLedgerRecord({
+        checkoutId:
+          session.checkoutId,
+
+        errorCode:
+          "FINAL_NO_MATCH_VOID_NOT_CONFIRMED",
+
+        errorMessage:
+          finalVoidResult.message,
+
+        errorData: {
+          authorizeTransactionId:
+            transactionId,
+
+          uncertain:
+            finalVoidResult.uncertain,
+        },
+      });
+
+      return NextResponse.json(
+        {
+          authorized: true,
+          recoveryRequired: true,
+
+          error:
+            "No Bookeo booking was confirmed, and the authorization void requires recovery.",
+        },
+        {
+          status: 502,
+        }
+      );
+    }
+
+    /*
+     * Bookeo positively confirmed the
+     * booking and returned bookingNumber.
+     */
+    await updateBookingLedgerRecord({
+      checkoutId:
+        session.checkoutId,
+
+      bookeoBookingId:
+        finalBookeoResult.bookingId,
+
+      status:
+        BOOKING_STATES.BOOKED,
+    });
+
+    return captureBookedCheckout({
+      checkoutId:
+        session.checkoutId,
+
+      transactionId,
+
+      amount,
+
+      bookeoBookingId:
+        finalBookeoResult.bookingId,
+
+      responseData: {
+        postAuthHoldValid:
+          true,
+
+        holdReplaced:
+          postAuthHoldResult.replaced,
+      },
+    });
+  }
+
+    /*
+     * responseCode 2 or 3 is an explicit
+     * decline/error result from Authorize.Net.
+     *
+     * No Bookeo booking is created.
+     */
+    if (
+    responseCode === "2" ||
+    responseCode === "3"
+  ) {
+    await updateBookingLedgerRecord({
+      checkoutId:
+        session.checkoutId,
+      status:
+        BOOKING_STATES.FAILED,
+      errorCode:
+        `AUTHORIZE_${responseCode}`,
+      errorMessage:
+        transactionMessage ||
+        "Authorize.Net declined the authorization.",
+      errorData: {
+        responseCode,
+      },
+    });
+
+    return NextResponse.json(
+      {
+        authorized: false,
+        declined: true,
+        error:
+          transactionMessage ||
+          "The card was declined.",
+      },
+      {
+        status: 402,
+      }
+    );
+  }
+
+  /*
+   * Anything else is ambiguous.
+   * Leave the ledger AUTHORIZING so we do not
+   * accidentally send another authorization.
+   */
+  return NextResponse.json(
+    {
+      error:
+        "Authorize.Net did not return a confirmed authorization result.",
+      uncertain: true,
+    },
+    {
+      status: 502,
+    }
+  );
+} catch (error) {
+  console.error(
+    "Authorize.Net AUTH-ONLY failed.",
+    error
+  );
+
+  return NextResponse.json(
+    {
+      error:
+        "We could not confirm the payment authorization.",
+      uncertain: true,
+    },
+    {
+      status: 502,
+    }
+  );
+}
+}

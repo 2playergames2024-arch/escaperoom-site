@@ -1,0 +1,136 @@
+﻿    }
+
+    const bookings =
+      bookingPages.bookings;
+
+    /*
+     * Match only active bookings for this exact
+     * Bookeo product and event.
+     */
+    const eventMatches =
+      bookings.filter(
+        (booking) =>
+          booking.productId ===
+            orphan.productId &&
+          booking.eventId ===
+            orphan.eventId &&
+          booking.canceled !==
+            true
+      );
+
+    const orphanPlayers =
+      Number(
+        orphan.players
+      );
+
+    const orphanAmount =
+      Number(
+        orphan.amount
+      );
+
+    /*
+     * Require positive evidence for participant
+     * count and paid amount.
+     */
+    const strongMatches =
+      eventMatches.filter(
+        (booking) => {
+          const participants =
+            booking.participants
+              ?.numbers?.find(
+                (participant) =>
+                  participant.peopleCategoryId ===
+                  BOOKEO_PEOPLE_CATEGORY_ID
+              )?.number;
+
+          const paidAmount =
+            Number(
+              booking.price
+                ?.totalPaid
+                ?.amount
+            );
+
+          if (
+            !Number.isFinite(
+              participants
+            ) ||
+            !Number.isFinite(
+              orphanPlayers
+            ) ||
+            participants !==
+              orphanPlayers
+          ) {
+            return false;
+          }
+
+          if (
+            !Number.isFinite(
+              paidAmount
+            ) ||
+            !Number.isFinite(
+              orphanAmount
+            ) ||
+            Math.abs(
+              paidAmount -
+                orphanAmount
+            ) >= 0.001
+          ) {
+            return false;
+          }
+
+          return true;
+        }
+      );
+
+    /*
+     * Exactly one strong match is required.
+     *
+     * Zero means no existing booking can be proven.
+     * Multiple means the result is ambiguous.
+     */
+    if (
+      strongMatches.length !==
+      1
+    ) {
+      const result =
+        strongMatches.length ===
+        0
+          ? "no_match"
+          : "ambiguous";
+
+      await redis.set(
+        `orphan-payment:${sessionId}`,
+        {
+          ...orphan,
+          lastReconciliationResult:
+            result,
+          lastReconciledAt:
+            Date.now(),
+          eventMatches:
+            eventMatches.length,
+          strongMatches:
+            strongMatches.length,
+        },
+        {
+          ex:
+            60 *
+            60 *
+            24 *
+            30,
+        }
+      );
+
+      return NextResponse.json({
+        result,
+        sessionId,
+        eventMatches:
+          eventMatches.length,
+        strongMatches:
+          strongMatches.length,
+
+        candidates:
+          strongMatches.map(
+            (booking) => ({
+              bookingNumber:
+                booking.bookingNumber,
+              eventId:

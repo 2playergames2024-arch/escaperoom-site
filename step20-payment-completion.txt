@@ -1,0 +1,181 @@
+﻿          buildPurchaseAnalytics(
+            session,
+            finalizedAfterLock.transactionId,
+            session.total
+          ),
+      };
+    }
+
+    const orphanAfterLock =
+      await redis.get<OrphanPayment>(
+        `orphan-payment:${sessionId}`
+      );
+
+    if (
+      orphanAfterLock &&
+      orphanAfterLock.status ===
+      "needs_recovery" &&
+      orphanAfterLock.failureType !==
+      "payment_received_pending_finalization"
+    ) {
+      return {
+        ok: false,
+        status: 409,
+        recoveryRequired: true,
+        retryable: false,
+
+        error:
+          "Payment was received, but this booking requires staff reconciliation before any further Bookeo attempt.",
+      };
+    }
+
+    const bookeoFinalizeStartedAt =
+      Date.now();
+
+    const holdExpirationMs =
+      new Date(
+        session.holdExpiration
+      ).getTime();
+
+    console.info(
+      "BOOKING_TIMELINE",
+      {
+        stage:
+          "bookeo_finalize_started",
+
+        sessionId,
+
+        transactionId:
+          verifiedPayment.transactionId,
+
+        holdId:
+          session.holdId,
+
+        holdExpiration:
+          session.holdExpiration,
+
+        occurredAt:
+          new Date(
+            bookeoFinalizeStartedAt
+          ).toISOString(),
+
+        millisecondsUntilHoldExpiration:
+          Number.isFinite(
+            holdExpirationMs
+          )
+            ? holdExpirationMs -
+            bookeoFinalizeStartedAt
+            : null,
+
+        holdAlreadyExpired:
+          Number.isFinite(
+            holdExpirationMs
+          )
+            ? bookeoFinalizeStartedAt >=
+            holdExpirationMs
+            : null,
+      }
+    );
+
+    const url =
+      `https://api.bookeo.com/v2/bookings` +
+      `?previousHoldId=${encodeURIComponent(
+        session.holdId
+      )}` +
+      `&notifyUsers=true` +
+      `&notifyCustomer=true`;
+
+    const response =
+      await fetch(
+        url,
+        {
+          method: "POST",
+          cache: "no-store",
+
+          signal:
+            AbortSignal.timeout(
+              BOOKEO_FINALIZE_TIMEOUT_MS
+            ),
+
+          headers: {
+            "Content-Type":
+              "application/json",
+
+            "X-Bookeo-apiKey":
+              BOOKEO_API_KEY,
+
+            "X-Bookeo-secretKey":
+              BOOKEO_SECRET_KEY,
+          },
+
+          body:
+            JSON.stringify({
+              productId:
+                session.productId,
+
+              eventId:
+                session.eventId,
+
+              participants: {
+                numbers: [
+                  {
+                    peopleCategoryId:
+                      BOOKEO_PEOPLE_CATEGORY_ID,
+
+                    number:
+                      Number(
+                        session.players
+                      ),
+                  },
+                ],
+              },
+
+              customer: {
+                firstName:
+                  session.firstName ||
+                  "",
+
+                lastName:
+                  session.lastName ||
+                  "",
+
+                emailAddress:
+                  session.email ||
+                  "",
+
+                phoneNumbers:
+                  session.phone
+                    ? [
+                      {
+                        number:
+                          session.phone,
+
+                        type:
+                          "mobile",
+                      },
+                    ]
+                    : [],
+              },
+
+              initialPayments: [
+                {
+                  reason:
+                    "Paid online",
+
+                  comment:
+                    `Authorize.net transaction ${verifiedPayment.transactionId}`,
+
+                  amount: {
+                    amount:
+                      expectedAmount.toFixed(
+                        2
+                      ),
+
+                    currency:
+                      "USD",
+                  },
+
+                  paymentMethod:
+                    "creditCard",
+                },
+              ],

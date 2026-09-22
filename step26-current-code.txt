@@ -1,0 +1,5452 @@
+﻿===== app/api/cron/reconcile-payments/route.ts =====
+import {
+  NextRequest,
+  NextResponse,
+} from "next/server";
+
+import { Redis } from "@upstash/redis";
+
+import {
+  type PaymentAttempt,
+} from "../../../lib/booking";
+
+import {
+  completePaidBooking,
+} from "../../../lib/paymentCompletion";
+
+const redis = Redis.fromEnv();
+
+const RECOVERY_DELAY_MS =
+  60 * 1000;
+
+const MAX_AUTO_RECOVERY_AGE_MS =
+  6 * 60 * 60 * 1000;
+
+export async function GET(
+  req: NextRequest
+) {
+  const authHeader =
+    req.headers.get(
+      "authorization"
+    );
+
+  const cronSecret =
+    process.env.CRON_SECRET;
+
+  if (
+    !cronSecret ||
+    authHeader !==
+    `Bearer ${cronSecret}`
+  ) {
+    return NextResponse.json(
+      {
+        error: "Unauthorized",
+      },
+      {
+        status: 401,
+      }
+    );
+  }
+
+  let cursor = 0;
+
+  let checked = 0;
+  let attempted = 0;
+  let recovered = 0;
+
+  do {
+    const [
+      nextCursor,
+      keys,
+    ] =
+      await redis.scan(
+        cursor,
+        {
+          match:
+            "payment-attempt:*",
+          count: 100,
+        }
+      );
+
+    cursor =
+      Number(nextCursor);
+
+    for (const key of keys) {
+      const paymentAttempt =
+        await redis.get<PaymentAttempt>(
+          key
+        );
+
+      if (
+        !paymentAttempt ||
+        (
+          paymentAttempt.status !== "ready" &&
+          paymentAttempt.status !== "paid"
+        )
+      ) {
+        continue;
+      }
+
+      checked++;
+
+      const paymentAgeMs =
+        Date.now() -
+        paymentAttempt.updatedAt;
+
+      if (
+        paymentAgeMs <
+        RECOVERY_DELAY_MS ||
+        paymentAgeMs >
+        MAX_AUTO_RECOVERY_AGE_MS
+      ) {
+        continue;
+      }
+
+      attempted++;
+
+      const result =
+        await completePaidBooking(
+          paymentAttempt.sessionId
+        );
+
+      if (result.ok) {
+        recovered++;
+      }
+    }
+  } while (cursor !== 0);
+
+  return NextResponse.json({
+    ok: true,
+    checked,
+    attempted,
+    recovered,
+  });
+}
+
+===== app/lib/bookingLedger.ts =====
+import "server-only";
+import { neon } from "@neondatabase/serverless";
+import { BOOKING_STATES } from "./bookingState";
+
+function getSql() {
+  const databaseUrl = process.env.DATABASE_URL;
+
+  if (!databaseUrl) {
+    throw new Error(
+      "DATABASE_URL is not configured."
+    );
+  }
+
+  return neon(databaseUrl);
+}
+
+export type BookingLedgerRecord = {
+  checkoutId: string;
+  holdId: string | null;
+  authorizeTransactionId: string | null;
+  bookeoBookingId: string | null;
+  status: string;
+  errorCode: string | null;
+  errorMessage: string | null;
+  errorData: unknown;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function createBookingLedgerRecord({
+  checkoutId,
+  holdId,
+  status,
+}: {
+  checkoutId: string;
+  holdId?: string | null;
+  status: string;
+}) {
+  const sql = getSql();
+
+  const rows = await sql`
+    INSERT INTO booking_ledger (
+      checkout_id,
+      hold_id,
+      status
+    )
+    VALUES (
+      ${checkoutId},
+      ${holdId ?? null},
+      ${status}
+    )
+    RETURNING *
+  `;
+
+  return rows[0];
+}
+
+export async function getBookingLedgerRecord(
+  checkoutId: string
+) {
+  const sql = getSql();
+
+  const rows = await sql`
+    SELECT *
+    FROM booking_ledger
+    WHERE checkout_id = ${checkoutId}
+    LIMIT 1
+  `;
+
+  return rows[0] ?? null;
+}
+
+export async function updateBookingLedgerRecord({
+  checkoutId,
+  holdId,
+  authorizeTransactionId,
+  bookeoBookingId,
+  status,
+  errorCode,
+  errorMessage,
+  errorData,
+}: {
+  checkoutId: string;
+  holdId?: string | null;
+  authorizeTransactionId?: string | null;
+  bookeoBookingId?: string | null;
+  status?: string;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  errorData?: unknown;
+}) {
+  const sql = getSql();
+
+  const rows = await sql`
+    UPDATE booking_ledger
+    SET
+      hold_id =
+        COALESCE(
+          ${holdId ?? null},
+          hold_id
+        ),
+      authorize_transaction_id =
+        COALESCE(
+          ${authorizeTransactionId ?? null},
+          authorize_transaction_id
+        ),
+      bookeo_booking_id =
+        COALESCE(
+          ${bookeoBookingId ?? null},
+          bookeo_booking_id
+        ),
+      status =
+        COALESCE(
+          ${status ?? null},
+          status
+        ),
+      error_code =
+        COALESCE(
+          ${errorCode ?? null},
+          error_code
+        ),
+      error_message =
+        COALESCE(
+          ${errorMessage ?? null},
+          error_message
+        ),
+      error_data =
+        COALESCE(
+          ${errorData === undefined
+            ? null
+            : JSON.stringify(errorData)}::jsonb,
+          error_data
+        ),
+      updated_at = NOW()
+    WHERE checkout_id = ${checkoutId}
+    RETURNING *
+  `;
+
+  return rows[0] ?? null;
+}
+export async function claimCheckoutForAuthorization(
+  checkoutId: string
+) {
+  const sql = getSql();
+
+  const rows = await sql`
+    UPDATE booking_ledger
+    SET
+      status = ${BOOKING_STATES.AUTHORIZING},
+      updated_at = NOW()
+    WHERE
+      checkout_id = ${checkoutId}
+      AND status = ${BOOKING_STATES.HOLD_CREATED}
+    RETURNING *
+  `;
+
+  return rows[0] ?? null;
+}
+
+export async function markBookingCaptureComplete(
+  checkoutId: string
+) {
+  const sql = getSql();
+
+  const rows = await sql`
+    UPDATE booking_ledger
+    SET
+      status = ${BOOKING_STATES.COMPLETE},
+      error_code = NULL,
+      error_message = NULL,
+      error_data = NULL,
+      updated_at = NOW()
+    WHERE checkout_id = ${checkoutId}
+    RETURNING *
+  `;
+
+  return rows[0] ?? null;
+}
+
+export async function getBookingLedgerRecordByAuthorizeTransactionId(
+  authorizeTransactionId: string
+) {
+  const sql = getSql();
+
+  const rows = await sql`
+    SELECT *
+    FROM booking_ledger
+    WHERE authorize_transaction_id = ${authorizeTransactionId}
+    ORDER BY created_at ASC
+    LIMIT 2
+  `;
+
+  if (rows.length === 0) {
+    return {
+      kind: "NOT_FOUND" as const,
+      record: null,
+    };
+  }
+
+  if (rows.length > 1) {
+    return {
+      kind: "AMBIGUOUS" as const,
+      record: null,
+    };
+  }
+
+  return {
+    kind: "FOUND" as const,
+    record: rows[0],
+  };
+}
+
+===== app/lib/authorizeSandbox.ts =====
+import "server-only";
+
+const AUTHORIZE_SANDBOX_LOGIN_ID =
+  process.env.AUTHORIZE_SANDBOX_LOGIN_ID;
+
+const AUTHORIZE_SANDBOX_TRANSACTION_KEY =
+  process.env.AUTHORIZE_SANDBOX_TRANSACTION_KEY;
+
+const AUTHORIZE_SANDBOX_URL =
+  "https://apitest.authorize.net/xml/v1/request.api";
+
+export type VoidAuthorizationResult =
+  | {
+      ok: true;
+      transactionId: string;
+    }
+  | {
+      ok: false;
+      message: string;
+      uncertain: boolean;
+    };
+
+export async function voidSandboxAuthorization(
+  transactionId: string
+): Promise<VoidAuthorizationResult> {
+  if (
+    !AUTHORIZE_SANDBOX_LOGIN_ID ||
+    !AUTHORIZE_SANDBOX_TRANSACTION_KEY
+  ) {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net sandbox credentials are not configured.",
+      uncertain: false,
+    };
+  }
+
+  try {
+    const response =
+      await fetch(
+        AUTHORIZE_SANDBOX_URL,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            createTransactionRequest: {
+              merchantAuthentication: {
+                name:
+                  AUTHORIZE_SANDBOX_LOGIN_ID,
+                transactionKey:
+                  AUTHORIZE_SANDBOX_TRANSACTION_KEY,
+              },
+              transactionRequest: {
+                transactionType:
+                  "voidTransaction",
+                refTransId:
+                  transactionId,
+              },
+            },
+          }),
+          signal:
+            AbortSignal.timeout(
+              15_000
+            ),
+        }
+      );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        message:
+          "Authorize.Net did not confirm the void.",
+        uncertain: true,
+      };
+    }
+
+    const data =
+      await response.json();
+
+    const transactionResponse =
+      data?.transactionResponse;
+
+    const responseCode =
+      String(
+        transactionResponse
+          ?.responseCode || ""
+      );
+
+    const voidTransactionId =
+      String(
+        transactionResponse
+          ?.transId ||
+        transactionId
+      );
+
+    const message =
+      String(
+        transactionResponse
+          ?.messages?.[0]
+          ?.description ||
+        transactionResponse
+          ?.errors?.[0]
+          ?.errorText ||
+        data
+          ?.messages?.message?.[0]
+          ?.text ||
+        "Authorize.Net did not confirm the void."
+      );
+
+    if (responseCode === "1") {
+      return {
+        ok: true,
+        transactionId:
+          voidTransactionId,
+      };
+    }
+
+    return {
+      ok: false,
+      message,
+      uncertain: false,
+    };
+  } catch {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net did not confirm the void.",
+      uncertain: true,
+    };
+  }
+}
+
+export type CaptureAuthorizationResult =
+  | {
+      ok: true;
+      transactionId: string;
+    }
+  | {
+      ok: false;
+      message: string;
+      uncertain: boolean;
+    };
+
+export async function captureSandboxAuthorization(
+  transactionId: string,
+  amount: number
+): Promise<CaptureAuthorizationResult> {
+  if (
+    !AUTHORIZE_SANDBOX_LOGIN_ID ||
+    !AUTHORIZE_SANDBOX_TRANSACTION_KEY
+  ) {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net sandbox credentials are not configured.",
+      uncertain: false,
+    };
+  }
+
+  try {
+    const response =
+      await fetch(
+        AUTHORIZE_SANDBOX_URL,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            createTransactionRequest: {
+              merchantAuthentication: {
+                name:
+                  AUTHORIZE_SANDBOX_LOGIN_ID,
+                transactionKey:
+                  AUTHORIZE_SANDBOX_TRANSACTION_KEY,
+              },
+              transactionRequest: {
+                transactionType:
+                  "priorAuthCaptureTransaction",
+                amount:
+                  amount.toFixed(2),
+                refTransId:
+                  transactionId,
+              },
+            },
+          }),
+          signal:
+            AbortSignal.timeout(
+              15_000
+            ),
+        }
+      );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        message:
+          "Authorize.Net did not return a confirmed capture result.",
+        uncertain: true,
+      };
+    }
+
+    const data =
+      await response.json();
+
+    const transactionResponse =
+      data?.transactionResponse;
+
+    const responseCode =
+      String(
+        transactionResponse
+          ?.responseCode || ""
+      );
+
+    const captureTransactionId =
+      String(
+        transactionResponse
+          ?.transId ||
+        transactionId
+      );
+
+    const message =
+      String(
+        transactionResponse
+          ?.messages?.[0]
+          ?.description ||
+        transactionResponse
+          ?.errors?.[0]
+          ?.errorText ||
+        data
+          ?.messages?.message?.[0]
+          ?.text ||
+        "Authorize.Net did not confirm the capture."
+      );
+
+    if (responseCode === "1") {
+      return {
+        ok: true,
+        transactionId:
+          captureTransactionId,
+      };
+    }
+
+    return {
+      ok: false,
+      message,
+      uncertain: false,
+    };
+  } catch {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net did not return a confirmed capture result.",
+      uncertain: true,
+    };
+  }
+}
+
+export type SandboxTransactionStateResult =
+  | {
+      ok: true;
+      transactionId: string;
+      status: string;
+      authorizedAmount: number | null;
+      settledAmount: number | null;
+    }
+  | {
+      ok: false;
+      message: string;
+      uncertain: boolean;
+    };
+
+export async function getSandboxTransactionState(
+  transactionId: string
+): Promise<SandboxTransactionStateResult> {
+  if (
+    !AUTHORIZE_SANDBOX_LOGIN_ID ||
+    !AUTHORIZE_SANDBOX_TRANSACTION_KEY
+  ) {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net sandbox credentials are not configured.",
+      uncertain: false,
+    };
+  }
+
+  try {
+    const response =
+      await fetch(
+        AUTHORIZE_SANDBOX_URL,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            getTransactionDetailsRequest: {
+              merchantAuthentication: {
+                name:
+                  AUTHORIZE_SANDBOX_LOGIN_ID,
+                transactionKey:
+                  AUTHORIZE_SANDBOX_TRANSACTION_KEY,
+              },
+              transId:
+                transactionId,
+            },
+          }),
+          signal:
+            AbortSignal.timeout(
+              15_000
+            ),
+        }
+      );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        message:
+          "Authorize.Net did not return transaction details.",
+        uncertain: true,
+      };
+    }
+
+    const data =
+      await response.json();
+
+    const transaction =
+      data?.transaction;
+
+    const status =
+      String(
+        transaction
+          ?.transactionStatus || ""
+      );
+
+    const returnedTransactionId =
+      String(
+        transaction?.transId ||
+        transactionId
+      );
+
+    if (!transaction || !status) {
+      const message =
+        String(
+          data
+            ?.messages?.message?.[0]
+            ?.text ||
+          "Authorize.Net did not return a usable transaction status."
+        );
+
+      return {
+        ok: false,
+        message,
+        uncertain: false,
+      };
+    }
+
+    const authAmount =
+      Number(
+        transaction?.authAmount
+      );
+
+    const settleAmount =
+      Number(
+        transaction?.settleAmount
+      );
+
+    return {
+      ok: true,
+      transactionId:
+        returnedTransactionId,
+      status,
+      authorizedAmount:
+        Number.isFinite(authAmount)
+          ? authAmount
+          : null,
+      settledAmount:
+        Number.isFinite(settleAmount)
+          ? settleAmount
+          : null,
+    };
+  } catch {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net transaction status could not be confirmed.",
+      uncertain: true,
+    };
+  }
+}
+
+===== app/lib/bookingState.ts =====
+export const BOOKING_STATES = {
+  HOLD_CREATED: "HOLD_CREATED",
+  AUTHORIZING: "AUTHORIZING",
+  AUTHORIZED: "AUTHORIZED",
+  BOOKED: "BOOKED",
+  CAPTURE_FAILED: "CAPTURE_FAILED",
+  COMPLETE: "COMPLETE",
+  FAILED: "FAILED",
+  VOIDED: "VOIDED",
+} as const;
+
+export type BookingState =
+  (typeof BOOKING_STATES)[keyof typeof BOOKING_STATES];
+
+const ALLOWED_TRANSITIONS: Record<
+  BookingState,
+  BookingState[]
+> = {
+  HOLD_CREATED: [
+    "AUTHORIZING",
+    "FAILED",
+  ],
+
+  AUTHORIZING: [
+    "AUTHORIZED",
+    "FAILED",
+  ],
+
+  AUTHORIZED: [
+    "BOOKED",
+    "FAILED",
+    "VOIDED",
+  ],
+
+  BOOKED: [
+    "COMPLETE",
+    "CAPTURE_FAILED",
+  ],
+
+  CAPTURE_FAILED: [
+    "COMPLETE",
+    "CAPTURE_FAILED",
+  ],
+
+  COMPLETE: [],
+
+  FAILED: [],
+
+  VOIDED: [],
+};
+
+export function canTransitionBookingState(
+  currentState: BookingState,
+  nextState: BookingState
+) {
+  return ALLOWED_TRANSITIONS[
+    currentState
+  ].includes(nextState);
+}
+
+export function assertBookingStateTransition(
+  currentState: BookingState,
+  nextState: BookingState
+) {
+  if (
+    !canTransitionBookingState(
+      currentState,
+      nextState
+    )
+  ) {
+    throw new Error(
+      `Invalid booking state transition: ${currentState} -> ${nextState}`
+    );
+  }
+}
+
+===== Bookeo-related files =====
+
+===== app\api\admin\orphans\reconcile\route.ts =====
+import { NextResponse } from "next/server";
+import { Redis } from "@upstash/redis";
+import { incrementRateLimit } from "@/app/lib/rateLimit";
+import {
+  BOOKEO_PEOPLE_CATEGORY_ID,
+  LOCATIONS,
+} from "@/app/data/locations";
+import {
+  getEasternDayBounds,
+} from "@/app/lib/booking";
+
+import { fetchAllBookeoBookingPages } from "@/app/lib/bookeoBookingsPagination";
+
+const redis = Redis.fromEnv();
+
+const BOOKEO_KOP_API_KEY =
+  process.env.BOOKEO_KOP_API_KEY;
+
+const BOOKEO_CH_API_KEY =
+  process.env.BOOKEO_CH_API_KEY;
+
+const BOOKEO_SECRET_KEY =
+  process.env.BOOKEO_SECRET_KEY;
+
+const BOOKEO_RECONCILE_TIMEOUT_MS =
+  15_000;
+
+type OrphanPayment = {
+  sessionId: string;
+  transactionId: string;
+  amount: string;
+  holdId: string;
+  productId: string;
+  eventId: string;
+  players: string;
+  location: string;
+  date: string;
+  time: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  bookeoError: unknown;
+  createdAt: number;
+  status:
+    | "needs_recovery"
+    | "reconciled"
+    | "recovered";
+  failureType:
+    | "bookeo_rejected"
+    | "uncertain";
+};
+
+type BookeoBooking = {
+  bookingNumber?: string;
+  eventId?: string;
+  productId?: string;
+  startTime?: string;
+  creationTime?: string;
+  title?: string;
+  canceled?: boolean;
+
+  participants?: {
+    numbers?: Array<{
+      peopleCategoryId?: string;
+      number?: number;
+    }>;
+  };
+
+  price?: {
+    totalPaid?: {
+      amount?: string;
+      currency?: string;
+    };
+  };
+};
+
+export async function POST(
+  request: Request
+) {
+  try {
+    /*
+     * Protect the administrative endpoint from
+     * unlimited secret-guessing and Bookeo requests.
+     */
+    const forwardedFor =
+      request.headers.get(
+        "x-forwarded-for"
+      );
+
+    const ip =
+      forwardedFor
+        ?.split(",")[0]
+        ?.trim() ||
+      request.headers.get(
+        "x-real-ip"
+      ) ||
+      "unknown";
+
+    const rateLimitKey =
+      `rate-limit:admin-reconcile:${ip}`;
+
+    const attempts =
+    await incrementRateLimit(
+      redis,
+      rateLimitKey,
+      600
+    );
+
+    if (attempts > 20) {
+      return NextResponse.json(
+        {
+          error:
+            "Too many recovery administration requests.",
+        },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": "600",
+          },
+        }
+      );
+    }
+
+    const adminSecret =
+      process.env.ADMIN_RECOVERY_SECRET;
+
+    if (!adminSecret) {
+      console.error(
+        "Recovery administration is not configured."
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            "Recovery administration is not configured.",
+        },
+        { status: 500 }
+      );
+    }
+
+    const suppliedSecret =
+      request.headers.get(
+        "x-admin-secret"
+      );
+
+    if (
+      suppliedSecret !==
+      adminSecret
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Unauthorized.",
+        },
+        { status: 401 }
+      );
+    }
+
+    const body =
+      await request.json();
+
+    const sessionId =
+      String(
+        body.sessionId || ""
+      ).trim();
+
+    if (!sessionId) {
+      return NextResponse.json(
+        {
+          error:
+            "Missing booking session ID.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (
+      sessionId.length > 100 ||
+      !/^ERM-[0-9a-f-]+$/i.test(
+        sessionId
+      )
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Invalid booking session ID.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const orphan =
+      await redis.get<OrphanPayment>(
+        `orphan-payment:${sessionId}`
+      );
+
+    if (!orphan) {
+      return NextResponse.json(
+        {
+          error:
+            "Orphan payment not found.",
+        },
+        { status: 404 }
+      );
+    }
+
+    const BOOKEO_API_KEY =
+      orphan.location ===
+      LOCATIONS.cherryHill.slug
+        ? BOOKEO_CH_API_KEY
+        : orphan.location ===
+            LOCATIONS.kingOfPrussia.slug
+          ? BOOKEO_KOP_API_KEY
+          : null;
+
+    if (
+      !BOOKEO_API_KEY ||
+      !BOOKEO_SECRET_KEY
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Missing or invalid Bookeo location/credentials.",
+        },
+        { status: 500 }
+      );
+    }
+
+    /*
+     * If this session has already been finalized,
+     * reconciliation is unnecessary.
+     */
+    const existingFinalization =
+      await redis.get<{
+        sessionId: string;
+        bookingId: string;
+        transactionId: string;
+        finalizedAt: number;
+      }>(
+        `bookeo-finalized:${sessionId}`
+      );
+
+    if (
+      existingFinalization
+    ) {
+      return NextResponse.json({
+        result:
+          "already_finalized",
+        bookingNumber:
+          existingFinalization.bookingId,
+      });
+    }
+
+    if (!orphan.date) {
+      return NextResponse.json(
+        {
+          result:
+            "manual_review_required",
+          error:
+            "Orphan does not contain a booking date.",
+        },
+        { status: 409 }
+      );
+    }
+
+    /*
+     * Query Bookeo for bookings on the
+     * scheduled date for this exact product.
+     *
+     * This endpoint NEVER creates a booking.
+     */
+    const {
+      startTime,
+      endTime,
+    } =
+      getEasternDayBounds(
+        orphan.date
+      );
+
+    const url =
+      `https://api.bookeo.com/v2/bookings` +
+      `?startTime=${encodeURIComponent(
+        startTime
+      )}` +
+      `&endTime=${encodeURIComponent(
+        endTime
+      )}` +
+      `&productId=${encodeURIComponent(
+        orphan.productId
+      )}`;
+
+    const bookingPages =
+      await fetchAllBookeoBookingPages<BookeoBooking>(
+        url,
+        BOOKEO_API_KEY,
+        BOOKEO_SECRET_KEY,
+        BOOKEO_RECONCILE_TIMEOUT_MS
+      );
+
+    if (!bookingPages.ok) {
+      console.error(
+        "Bookeo reconciliation query failed.",
+        {
+          sessionId,
+          status:
+            bookingPages.status,
+        }
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            "Could not query all Bookeo pages for reconciliation.",
+          bookeoStatus:
+            bookingPages.status,
+        },
+        { status: 502 }
+      );
+    }
+
+    const bookings =
+      bookingPages.bookings;
+
+    /*
+     * Match only active bookings for this exact
+     * Bookeo product and event.
+     */
+    const eventMatches =
+      bookings.filter(
+        (booking) =>
+          booking.productId ===
+            orphan.productId &&
+          booking.eventId ===
+            orphan.eventId &&
+          booking.canceled !==
+            true
+      );
+
+    const orphanPlayers =
+      Number(
+        orphan.players
+      );
+
+    const orphanAmount =
+      Number(
+        orphan.amount
+      );
+
+    /*
+     * Require positive evidence for participant
+     * count and paid amount.
+     */
+    const strongMatches =
+      eventMatches.filter(
+        (booking) => {
+          const participants =
+            booking.participants
+              ?.numbers?.find(
+                (participant) =>
+                  participant.peopleCategoryId ===
+                  BOOKEO_PEOPLE_CATEGORY_ID
+              )?.number;
+
+          const paidAmount =
+            Number(
+              booking.price
+                ?.totalPaid
+                ?.amount
+            );
+
+          if (
+            !Number.isFinite(
+              participants
+            ) ||
+            !Number.isFinite(
+              orphanPlayers
+            ) ||
+            participants !==
+              orphanPlayers
+          ) {
+            return false;
+          }
+
+          if (
+            !Number.isFinite(
+              paidAmount
+            ) ||
+            !Number.isFinite(
+              orphanAmount
+            ) ||
+            Math.abs(
+              paidAmount -
+                orphanAmount
+            ) >= 0.001
+          ) {
+            return false;
+          }
+
+          return true;
+        }
+      );
+
+    /*
+     * Exactly one strong match is required.
+     *
+     * Zero means no existing booking can be proven.
+     * Multiple means the result is ambiguous.
+     */
+    if (
+      strongMatches.length !==
+      1
+    ) {
+      const result =
+        strongMatches.length ===
+        0
+          ? "no_match"
+          : "ambiguous";
+
+      await redis.set(
+        `orphan-payment:${sessionId}`,
+        {
+          ...orphan,
+          lastReconciliationResult:
+            result,
+          lastReconciledAt:
+            Date.now(),
+          eventMatches:
+            eventMatches.length,
+          strongMatches:
+            strongMatches.length,
+        },
+        {
+          ex:
+            60 *
+            60 *
+            24 *
+            30,
+        }
+      );
+
+      return NextResponse.json({
+        result,
+        sessionId,
+        eventMatches:
+          eventMatches.length,
+        strongMatches:
+          strongMatches.length,
+
+        candidates:
+          strongMatches.map(
+            (booking) => ({
+              bookingNumber:
+                booking.bookingNumber,
+              eventId:
+                booking.eventId,
+              productId:
+                booking.productId,
+              startTime:
+                booking.startTime,
+              creationTime:
+                booking.creationTime,
+              title:
+                booking.title,
+
+              players:
+                booking
+                  .participants
+                  ?.numbers?.find(
+                    (
+                      participant
+                    ) =>
+                      participant.peopleCategoryId ===
+                      BOOKEO_PEOPLE_CATEGORY_ID
+                  )?.number ??
+                null,
+
+              totalPaid:
+                booking.price
+                  ?.totalPaid
+                  ?.amount ??
+                null,
+            })
+          ),
+      });
+    }
+
+    const match =
+      strongMatches[0];
+
+    const bookingNumber =
+      String(
+        match.bookingNumber ||
+          ""
+      );
+
+    if (!bookingNumber) {
+      return NextResponse.json(
+        {
+          result:
+            "manual_review_required",
+          error:
+            "Matched Bookeo booking has no booking number.",
+        },
+        { status: 409 }
+      );
+    }
+
+    /*
+     * Exactly one existing Bookeo booking matched.
+     * Record that result without creating anything.
+     */
+    await redis.set(
+      `bookeo-finalized:${sessionId}`,
+      {
+        sessionId,
+        bookingId:
+          bookingNumber,
+        transactionId:
+          orphan.transactionId,
+        finalizedAt:
+          Date.now(),
+        reconciled:
+          true,
+      },
+      {
+        ex:
+          60 *
+          60 *
+          24 *
+          90,
+      }
+    );
+
+    await redis.set(
+      `orphan-payment:${sessionId}`,
+      {
+        ...orphan,
+        status:
+          "reconciled",
+        reconciledBookingNumber:
+          bookingNumber,
+        reconciledAt:
+          Date.now(),
+      },
+      {
+        ex:
+          60 *
+          60 *
+          24 *
+          30,
+      }
+    );
+
+    return NextResponse.json({
+      result:
+        "reconciled",
+      sessionId,
+      bookingNumber,
+    });
+  } catch (error) {
+    const isTimeout =
+      error instanceof Error &&
+      (
+        error.name ===
+          "TimeoutError" ||
+        error.name ===
+          "AbortError"
+      );
+
+    console.error(
+      "Bookeo reconciliation request failed.",
+      {
+        reason:
+          isTimeout
+            ? "timeout"
+            : "request_error",
+      }
+    );
+
+    return NextResponse.json(
+      {
+        error:
+          isTimeout
+            ? "Bookeo took too long to respond during reconciliation."
+            : "Could not reconcile orphan payment.",
+      },
+      {
+        status:
+          isTimeout
+            ? 504
+            : 500,
+      }
+    );
+  }
+}
+
+===== app\api\admin\orphans\recover\route.ts =====
+import { NextResponse } from "next/server";
+import { Redis } from "@upstash/redis";
+import { incrementRateLimit } from "@/app/lib/rateLimit";
+import {
+  BOOKEO_PEOPLE_CATEGORY_ID,
+  LOCATIONS,
+} from "@/app/data/locations";
+import {
+  getEasternDayBounds,
+} from "@/app/lib/booking";
+
+import { fetchAllBookeoBookingPages } from "@/app/lib/bookeoBookingsPagination";
+
+const redis = Redis.fromEnv();
+
+const BOOKEO_KOP_API_KEY =
+  process.env.BOOKEO_KOP_API_KEY;
+
+const BOOKEO_CH_API_KEY =
+  process.env.BOOKEO_CH_API_KEY;
+
+const BOOKEO_SECRET_KEY =
+  process.env.BOOKEO_SECRET_KEY;
+
+const EXTERNAL_REQUEST_TIMEOUT_MS = 15_000;
+
+function isTimeoutError(
+  error: unknown
+) {
+  return (
+    error instanceof Error &&
+    (
+      error.name === "TimeoutError" ||
+      error.name === "AbortError"
+    )
+  );
+}
+
+type OrphanPayment = {
+  sessionId: string;
+  transactionId: string;
+  amount: string;
+  holdId: string;
+  productId: string;
+  eventId: string;
+  players: string;
+  location: string;
+  date: string;
+  time: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  bookeoError: unknown;
+  createdAt: number;
+  status:
+  | "needs_recovery"
+  | "reconciled"
+  | "recovered";
+  failureType:
+  | "bookeo_rejected"
+  | "uncertain";
+  lastReconciliationResult?:
+  | "no_match"
+  | "ambiguous";
+  lastReconciledAt?: number;
+};
+
+type BookeoBooking = {
+  bookingNumber?: string;
+  eventId?: string;
+  productId?: string;
+  canceled?: boolean;
+
+  participants?: {
+    numbers?: Array<{
+      peopleCategoryId?: string;
+      number?: number;
+    }>;
+  };
+
+  price?: {
+    totalPaid?: {
+      amount?: string;
+    };
+  };
+};
+
+export async function POST(
+  request: Request
+) {
+  let lockKey = "";
+  let lockToken = "";
+  let lockAcquired = false;
+
+  try {
+    /*
+     * Protect this high-impact administrative endpoint
+     * from unlimited attempts.
+     */
+    const forwardedFor =
+      request.headers.get(
+        "x-forwarded-for"
+      );
+
+    const ip =
+      forwardedFor
+        ?.split(",")[0]
+        ?.trim() ||
+      request.headers.get(
+        "x-real-ip"
+      ) ||
+      "unknown";
+
+    const rateLimitKey =
+      `rate-limit:admin-recover:${ip}`;
+
+    const attempts =
+      await incrementRateLimit(
+        redis,
+        rateLimitKey,
+        600
+      );
+
+    if (attempts > 20) {
+      return NextResponse.json(
+        {
+          error:
+            "Too many recovery administration requests.",
+        },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": "600",
+          },
+        }
+      );
+    }
+
+    const adminSecret =
+      process.env.ADMIN_RECOVERY_SECRET;
+
+    if (!adminSecret) {
+      console.error(
+        "Recovery administration is not configured."
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            "Recovery administration is not configured.",
+        },
+        { status: 500 }
+      );
+    }
+
+    if (
+      request.headers.get(
+        "x-admin-secret"
+      ) !== adminSecret
+    ) {
+      return NextResponse.json(
+        {
+          error: "Unauthorized.",
+        },
+        { status: 401 }
+      );
+    }
+
+    const loginId =
+      process.env.AUTHORIZE_LOGIN_ID;
+
+    const transactionKey =
+      process.env.AUTHORIZE_TRANSACTION_KEY;
+
+    const authorizeEnvironment =
+      process.env.AUTHORIZE_ENVIRONMENT ||
+      "production";
+
+    if (
+      !loginId ||
+      !transactionKey
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Authorize.net credentials are missing.",
+        },
+        { status: 500 }
+      );
+    }
+
+    const body =
+      await request.json();
+
+    const sessionId =
+      String(
+        body.sessionId || ""
+      ).trim();
+
+    if (!sessionId) {
+      return NextResponse.json(
+        {
+          error:
+            "Missing booking session ID.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (
+      sessionId.length > 100 ||
+      !/^ERM-[0-9a-f-]+$/i.test(
+        sessionId
+      )
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Invalid booking session ID.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const orphan =
+      await redis.get<OrphanPayment>(
+        `orphan-payment:${sessionId}`
+      );
+
+    if (!orphan) {
+      return NextResponse.json(
+        {
+          error:
+            "Orphan payment not found.",
+        },
+        { status: 404 }
+      );
+    }
+
+    const BOOKEO_API_KEY =
+      orphan.location ===
+        LOCATIONS.cherryHill.slug
+        ? BOOKEO_CH_API_KEY
+        : orphan.location ===
+          LOCATIONS.kingOfPrussia.slug
+          ? BOOKEO_KOP_API_KEY
+          : null;
+
+    if (
+      !BOOKEO_API_KEY ||
+      !BOOKEO_SECRET_KEY
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Missing or invalid Bookeo location/credentials.",
+        },
+        { status: 500 }
+      );
+    }
+
+    if (
+      orphan.status !==
+      "needs_recovery"
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "This orphan is not awaiting recovery.",
+        },
+        { status: 409 }
+      );
+    }
+
+    /*
+     * Recovery can only occur after reconciliation
+     * explicitly found zero matching bookings.
+     */
+    if (
+      orphan.lastReconciliationResult !==
+      "no_match" ||
+      !orphan.lastReconciledAt
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Run reconciliation successfully before recovery.",
+        },
+        { status: 409 }
+      );
+    }
+
+    /*
+     * Require a fresh reconciliation.
+     */
+    const reconciliationAge =
+      Date.now() -
+      orphan.lastReconciledAt;
+
+    if (
+      reconciliationAge >
+      5 * 60 * 1000
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Reconciliation result is too old. Reconcile again before recovery.",
+        },
+        { status: 409 }
+      );
+    }
+
+    const existingFinalization =
+      await redis.get(
+        `bookeo-finalized:${sessionId}`
+      );
+
+    if (
+      existingFinalization
+    ) {
+      return NextResponse.json({
+        result:
+          "already_finalized",
+      });
+    }
+
+    /*
+     * Atomic recovery lock.
+     */
+    lockKey =
+      `bookeo-recovery-lock:${sessionId}`;
+
+    lockToken =
+      crypto.randomUUID();
+
+    const lockResult =
+      await redis.set(
+        lockKey,
+        lockToken,
+        {
+          nx: true,
+          ex: 120,
+        }
+      );
+
+    if (
+      lockResult !== "OK"
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Recovery is already in progress.",
+        },
+        { status: 409 }
+      );
+    }
+
+    lockAcquired = true;
+
+    const finalizedAfterLock =
+      await redis.get(
+        `bookeo-finalized:${sessionId}`
+      );
+
+    if (
+      finalizedAfterLock
+    ) {
+      return NextResponse.json({
+        result:
+          "already_finalized",
+      });
+    }
+
+    /*
+     * FRESH AUTHORIZE.NET VERIFICATION
+     */
+    const authorizeApiUrl =
+      authorizeEnvironment ===
+        "sandbox"
+        ? "https://apitest.authorize.net/xml/v1/request.api"
+        : "https://api.authorize.net/xml/v1/request.api";
+
+    let authorizeResponse: Response;
+
+    try {
+      authorizeResponse =
+        await fetch(
+          authorizeApiUrl,
+          {
+            method: "POST",
+            signal:
+              AbortSignal.timeout(
+                EXTERNAL_REQUEST_TIMEOUT_MS
+              ),
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            cache: "no-store",
+            body:
+              JSON.stringify({
+                getTransactionDetailsRequest:
+                {
+                  merchantAuthentication:
+                  {
+                    name:
+                      loginId,
+                    transactionKey,
+                  },
+
+                  transId:
+                    orphan.transactionId,
+                },
+              }),
+          }
+        );
+    } catch (error) {
+      console.error(
+        "Authorize.Net recovery verification request failed.",
+        {
+          sessionId,
+          reason:
+            isTimeoutError(
+              error
+            )
+              ? "timeout"
+              : "request_error",
+        }
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            isTimeoutError(error)
+              ? "Authorize.net took too long to respond during recovery verification."
+              : "Authorize.net could not be reached during recovery verification.",
+        },
+        {
+          status:
+            isTimeoutError(error)
+              ? 504
+              : 502,
+        }
+      );
+    }
+
+    const authorizeData =
+      await authorizeResponse.json();
+
+    if (
+      !authorizeResponse.ok ||
+      authorizeData?.messages
+        ?.resultCode !== "Ok" ||
+      !authorizeData
+        ?.transaction
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Authorize.net transaction could not be re-verified.",
+        },
+        { status: 409 }
+      );
+    }
+
+    const transaction =
+      authorizeData.transaction;
+
+    const expectedAmount =
+      Number(orphan.amount);
+
+    const actualAmount =
+      Number(
+        transaction.authAmount
+      );
+
+    const amountMatches =
+      Number.isFinite(
+        expectedAmount
+      ) &&
+      Number.isFinite(
+        actualAmount
+      ) &&
+      Math.abs(
+        expectedAmount -
+        actualAmount
+      ) < 0.001;
+
+    const transactionStatus =
+      String(
+        transaction.transactionStatus ||
+        ""
+      );
+
+    const statusIsValid = [
+      "capturedPendingSettlement",
+      "settledSuccessfully",
+    ].includes(
+      transactionStatus
+    );
+
+    if (
+      !amountMatches ||
+      !statusIsValid
+    ) {
+      console.error(
+        "Recovery payment verification failed.",
+        {
+          sessionId,
+          amountMatches,
+          transactionStatus,
+        }
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            "Authorize.net payment did not pass recovery verification.",
+        },
+        { status: 403 }
+      );
+    }
+
+    /*
+     * CHECK BOOKEO AGAIN INSIDE THE LOCK
+     */
+    const {
+      startTime,
+      endTime,
+    } =
+      getEasternDayBounds(
+        orphan.date
+      );
+
+    const lookupUrl =
+      `https://api.bookeo.com/v2/bookings` +
+      `?startTime=${encodeURIComponent(
+        startTime
+      )}` +
+      `&endTime=${encodeURIComponent(
+        endTime
+      )}` +
+      `&productId=${encodeURIComponent(
+        orphan.productId
+      )}`;
+
+    let bookingPages: {
+      ok: boolean;
+      status: number;
+      bookings: BookeoBooking[];
+    };
+
+    try {
+      bookingPages =
+        await fetchAllBookeoBookingPages<BookeoBooking>(
+          lookupUrl,
+          BOOKEO_API_KEY,
+          BOOKEO_SECRET_KEY,
+          EXTERNAL_REQUEST_TIMEOUT_MS
+        );
+    } catch (error) {
+      console.error(
+        "Bookeo pre-recovery lookup failed.",
+        {
+          sessionId,
+          reason:
+            isTimeoutError(
+              error
+            )
+              ? "timeout"
+              : "request_error",
+        }
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            isTimeoutError(error)
+              ? "Bookeo took too long to respond before recovery. No booking was created."
+              : "Bookeo could not be checked before recovery. No booking was created.",
+        },
+        {
+          status:
+            isTimeoutError(error)
+              ? 504
+              : 502,
+        }
+      );
+    }
+
+    if (!bookingPages.ok) {
+      return NextResponse.json(
+        {
+          error:
+            "Bookeo could not be checked across all result pages immediately before recovery. No booking was created.",
+          bookeoStatus:
+            bookingPages.status,
+        },
+        { status: 502 }
+      );
+    }
+
+    const bookings =
+      bookingPages.bookings;
+
+    const orphanPlayers =
+      Number(
+        orphan.players
+      );
+
+    const existingMatches =
+      bookings.filter(
+        (booking) => {
+          if (
+            booking.productId !==
+            orphan.productId ||
+            booking.eventId !==
+            orphan.eventId ||
+            booking.canceled ===
+            true
+          ) {
+            return false;
+          }
+
+          const participants =
+            booking.participants
+              ?.numbers?.find(
+                (
+                  participant
+                ) =>
+                  participant.peopleCategoryId ===
+                  BOOKEO_PEOPLE_CATEGORY_ID
+              )?.number;
+
+          const paidAmount =
+            Number(
+              booking.price
+                ?.totalPaid
+                ?.amount
+            );
+
+          return (
+            Number.isFinite(
+              participants
+            ) &&
+            participants ===
+            orphanPlayers &&
+            Number.isFinite(
+              paidAmount
+            ) &&
+            Math.abs(
+              paidAmount -
+              expectedAmount
+            ) < 0.001
+          );
+        }
+      );
+
+    if (
+      existingMatches.length >
+      0
+    ) {
+      /*
+       * A matching booking appeared after
+       * reconciliation. Never create a duplicate.
+       */
+      if (
+        existingMatches.length ===
+        1
+      ) {
+        const existingBookingNumber =
+          String(
+            existingMatches[0]
+              .bookingNumber ||
+            ""
+          );
+
+        if (
+          !existingBookingNumber
+        ) {
+          return NextResponse.json(
+            {
+              result:
+                "manual_review_required",
+              error:
+                "A matching Bookeo booking exists but has no booking number.",
+            },
+            { status: 409 }
+          );
+        }
+
+        await redis.set(
+          `bookeo-finalized:${sessionId}`,
+          {
+            sessionId,
+            bookingId:
+              existingBookingNumber,
+            transactionId:
+              orphan.transactionId,
+            finalizedAt:
+              Date.now(),
+            reconciled:
+              true,
+          },
+          {
+            ex:
+              60 *
+              60 *
+              24 *
+              90,
+          }
+        );
+
+        await redis.set(
+          `orphan-payment:${sessionId}`,
+          {
+            ...orphan,
+            status:
+              "reconciled",
+            reconciledBookingNumber:
+              existingBookingNumber,
+            reconciledAt:
+              Date.now(),
+          },
+          {
+            ex:
+              60 *
+              60 *
+              24 *
+              30,
+          }
+        );
+
+        return NextResponse.json({
+          result:
+            "reconciled",
+          sessionId,
+          bookingNumber:
+            existingBookingNumber,
+        });
+      }
+
+      return NextResponse.json(
+        {
+          result:
+            "manual_review_required",
+          error:
+            "Multiple matching Bookeo bookings exist. Recovery stopped to prevent a duplicate booking.",
+          matches:
+            existingMatches.length,
+        },
+        { status: 409 }
+      );
+    }
+
+    /*
+     * CREATE THE RECOVERY BOOKING
+     *
+     * IMPORTANT:
+     * Once this POST is sent, a timeout/network failure
+     * creates an UNCERTAIN outcome. Bookeo may have
+     * created the booking even if we never received
+     * the response.
+     *
+     * Therefore we invalidate the previous
+     * reconciliation result before allowing any
+     * future recovery attempt.
+     */
+    const createUrl =
+      "https://api.bookeo.com/v2/bookings";
+
+    let bookeoResponse: Response;
+
+    try {
+      bookeoResponse =
+        await fetch(
+          createUrl,
+          {
+            method: "POST",
+            cache: "no-store",
+            signal:
+              AbortSignal.timeout(
+                EXTERNAL_REQUEST_TIMEOUT_MS
+              ),
+            headers: {
+              "Content-Type":
+                "application/json",
+              "X-Bookeo-apiKey":
+                BOOKEO_API_KEY,
+              "X-Bookeo-secretKey":
+                BOOKEO_SECRET_KEY,
+            },
+            body:
+              JSON.stringify({
+                productId:
+                  orphan.productId,
+
+                eventId:
+                  orphan.eventId,
+
+                participants: {
+                  numbers: [
+                    {
+                      peopleCategoryId:
+                        BOOKEO_PEOPLE_CATEGORY_ID,
+                      number:
+                        Number(
+                          orphan.players
+                        ),
+                    },
+                  ],
+                },
+
+                customer: {
+                  firstName:
+                    orphan.firstName ||
+                    "",
+                  lastName:
+                    orphan.lastName ||
+                    "",
+                  emailAddress:
+                    orphan.email ||
+                    "",
+                  phoneNumbers:
+                    orphan.phone
+                      ? [
+                        {
+                          number:
+                            orphan.phone,
+                          type:
+                            "mobile",
+                        },
+                      ]
+                      : [],
+                },
+
+                initialPayments: [
+                  {
+                    reason:
+                      "Paid online - recovered booking",
+
+                    comment:
+                      `Recovered from Authorize.net transaction ${orphan.transactionId}`,
+
+                    amount: {
+                      amount:
+                        expectedAmount.toFixed(
+                          2
+                        ),
+                      currency:
+                        "USD",
+                    },
+
+                    paymentMethod:
+                      "creditCard",
+                  },
+                ],
+              }),
+          }
+        );
+    } catch (error) {
+      /*
+       * Do NOT allow another recovery attempt using
+       * the old "no_match" reconciliation.
+       *
+       * Bookeo may have created the booking before
+       * this request timed out.
+       */
+      await redis.set(
+        `orphan-payment:${sessionId}`,
+        {
+          ...orphan,
+
+          bookeoError: {
+            stage:
+              "recovery_create",
+            outcome:
+              "uncertain",
+            reason:
+              isTimeoutError(
+                error
+              )
+                ? "timeout"
+                : "request_error",
+          },
+
+          lastRecoveryAttemptAt:
+            Date.now(),
+
+          /*
+           * Setting this to zero deliberately causes
+           * the recovery precondition to fail until
+           * reconciliation is run again.
+           */
+          lastReconciledAt:
+            0,
+        },
+        {
+          ex:
+            60 *
+            60 *
+            24 *
+            30,
+        }
+      );
+
+      console.error(
+        "Bookeo recovery creation outcome is uncertain.",
+        {
+          sessionId,
+          reason:
+            isTimeoutError(
+              error
+            )
+              ? "timeout"
+              : "request_error",
+        }
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            "The recovery booking could not be safely confirmed. Reconcile this payment again before attempting recovery.",
+          reconciliationRequired:
+            true,
+        },
+        {
+          status:
+            isTimeoutError(error)
+              ? 504
+              : 502,
+        }
+      );
+    }
+
+    const bookeoData =
+      await bookeoResponse.json();
+
+    if (
+      !bookeoResponse.ok
+    ) {
+      await redis.set(
+        `orphan-payment:${sessionId}`,
+        {
+          ...orphan,
+
+          bookeoError: {
+            stage:
+              "recovery_create",
+            status:
+              bookeoResponse.status,
+          },
+
+          lastRecoveryAttemptAt:
+            Date.now(),
+
+          /*
+           * Require reconciliation again before
+           * another create attempt.
+           */
+          lastReconciledAt:
+            0,
+        },
+        {
+          ex:
+            60 *
+            60 *
+            24 *
+            30,
+        }
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            "Bookeo recovery booking failed. Reconcile again before another recovery attempt.",
+          bookeoStatus:
+            bookeoResponse.status,
+          reconciliationRequired:
+            true,
+        },
+        { status: 502 }
+      );
+    }
+
+    const bookingNumber =
+      String(
+        bookeoData
+          ?.bookingNumber ||
+        ""
+      );
+
+    /*
+     * Even an HTTP success without a booking number
+     * is treated as uncertain. Do not automatically
+     * create another booking.
+     */
+    if (
+      !bookingNumber
+    ) {
+      await redis.set(
+        `orphan-payment:${sessionId}`,
+        {
+          ...orphan,
+
+          bookeoError: {
+            stage:
+              "recovery_create",
+            outcome:
+              "uncertain",
+            reason:
+              "success_without_booking_number",
+          },
+
+          lastRecoveryAttemptAt:
+            Date.now(),
+
+          lastReconciledAt:
+            0,
+        },
+        {
+          ex:
+            60 *
+            60 *
+            24 *
+            30,
+        }
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            "Bookeo responded to the recovery request but the booking could not be safely confirmed. Reconcile again before attempting recovery.",
+          reconciliationRequired:
+            true,
+        },
+        { status: 500 }
+      );
+    }
+
+    await redis.set(
+      `bookeo-finalized:${sessionId}`,
+      {
+        sessionId,
+        bookingId:
+          bookingNumber,
+        transactionId:
+          orphan.transactionId,
+        finalizedAt:
+          Date.now(),
+        recovered:
+          true,
+      },
+      {
+        ex:
+          60 *
+          60 *
+          24 *
+          90,
+      }
+    );
+
+    await redis.set(
+      `orphan-payment:${sessionId}`,
+      {
+        ...orphan,
+        status:
+          "recovered",
+        recoveredBookingNumber:
+          bookingNumber,
+        recoveredAt:
+          Date.now(),
+      },
+      {
+        ex:
+          60 *
+          60 *
+          24 *
+          30,
+      }
+    );
+
+    return NextResponse.json({
+      result:
+        "recovered",
+      sessionId,
+      bookingNumber,
+    });
+  } catch (error) {
+    console.error(
+      "Orphan recovery request failed.",
+      {
+        reason:
+          isTimeoutError(
+            error
+          )
+            ? "timeout"
+            : error instanceof Error
+              ? error.name
+              : "unknown",
+      }
+    );
+
+    return NextResponse.json(
+      {
+        error:
+          "Could not recover orphan payment.",
+      },
+      { status: 500 }
+    );
+  } finally {
+    if (
+      lockAcquired &&
+      lockKey &&
+      lockToken
+    ) {
+      try {
+        const currentToken =
+          await redis.get<string>(
+            lockKey
+          );
+
+        if (
+          currentToken ===
+          lockToken
+        ) {
+          await redis.del(
+            lockKey
+          );
+        }
+      } catch (error) {
+        console.error(
+          "Recovery lock release failed.",
+          {
+            reason:
+              error instanceof Error
+                ? error.name
+                : "unknown",
+          }
+        );
+      }
+    }
+  }
+}
+
+===== app\api\cron\reconcile-payments\route.ts =====
+import {
+  NextRequest,
+  NextResponse,
+} from "next/server";
+
+import { Redis } from "@upstash/redis";
+
+import {
+  type PaymentAttempt,
+} from "../../../lib/booking";
+
+import {
+  completePaidBooking,
+} from "../../../lib/paymentCompletion";
+
+const redis = Redis.fromEnv();
+
+const RECOVERY_DELAY_MS =
+  60 * 1000;
+
+const MAX_AUTO_RECOVERY_AGE_MS =
+  6 * 60 * 60 * 1000;
+
+export async function GET(
+  req: NextRequest
+) {
+  const authHeader =
+    req.headers.get(
+      "authorization"
+    );
+
+  const cronSecret =
+    process.env.CRON_SECRET;
+
+  if (
+    !cronSecret ||
+    authHeader !==
+    `Bearer ${cronSecret}`
+  ) {
+    return NextResponse.json(
+      {
+        error: "Unauthorized",
+      },
+      {
+        status: 401,
+      }
+    );
+  }
+
+  let cursor = 0;
+
+  let checked = 0;
+  let attempted = 0;
+  let recovered = 0;
+
+  do {
+    const [
+      nextCursor,
+      keys,
+    ] =
+      await redis.scan(
+        cursor,
+        {
+          match:
+            "payment-attempt:*",
+          count: 100,
+        }
+      );
+
+    cursor =
+      Number(nextCursor);
+
+    for (const key of keys) {
+      const paymentAttempt =
+        await redis.get<PaymentAttempt>(
+          key
+        );
+
+      if (
+        !paymentAttempt ||
+        (
+          paymentAttempt.status !== "ready" &&
+          paymentAttempt.status !== "paid"
+        )
+      ) {
+        continue;
+      }
+
+      checked++;
+
+      const paymentAgeMs =
+        Date.now() -
+        paymentAttempt.updatedAt;
+
+      if (
+        paymentAgeMs <
+        RECOVERY_DELAY_MS ||
+        paymentAgeMs >
+        MAX_AUTO_RECOVERY_AGE_MS
+      ) {
+        continue;
+      }
+
+      attempted++;
+
+      const result =
+        await completePaidBooking(
+          paymentAttempt.sessionId
+        );
+
+      if (result.ok) {
+        recovered++;
+      }
+    }
+  } while (cursor !== 0);
+
+  return NextResponse.json({
+    ok: true,
+    checked,
+    attempted,
+    recovered,
+  });
+}
+
+===== app\components\LocationBookingPage.tsx =====
+"use client";
+
+import {
+  type LocationSlug,
+  getLocationBySlug,
+} from "../data/locations";
+import LocationHeader from "./LocationHeader";
+import LocationFooter from "./LocationFooter";
+import Image from "next/image";
+import Link from "next/link";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  trackClarityEvent,
+} from "../lib/clarity";
+
+type ResumeBooking = {
+  sessionId: string;
+  location: string;
+  roomName: string;
+  date: string;
+  time: string;
+};
+
+type Slot = {
+  eventId: string;
+  productId: string;
+  startTime: string;
+  endTime: string;
+  numSeatsAvailable: number;
+};
+
+type BookingRoom = {
+  slug: string;
+  name: string;
+  image: string;
+  basePrice: number;
+  displayPrice: string;
+  productId: string;
+  minPlayers: number;
+  saturdayMinPlayers: number;
+  maxPlayers: number;
+};
+
+type AvailabilityStatus =
+  | "loading"
+  | "loaded"
+  | "error";
+
+type Props = {
+  locationSlug: LocationSlug;
+};
+
+function formatDateForApi(date: Date) {
+  const year = date.getFullYear();
+  const month = String(
+    date.getMonth() + 1
+  ).padStart(2, "0");
+  const day = String(
+    date.getDate()
+  ).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function formatTime(dateString: string) {
+  return new Date(
+    dateString
+  ).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+export default function LocationBookingPage({
+  locationSlug,
+}: Props) {
+  const locationData =
+    getLocationBySlug(locationSlug);
+
+  if (!locationData) {
+    throw new Error(
+      "Invalid booking location."
+    );
+  }
+
+  const rooms = useMemo(
+    () =>
+      Object.values(
+        locationData.rooms
+      ) as BookingRoom[],
+    [locationData]
+  );
+
+  const dateInputRef =
+    useRef<HTMLInputElement>(null);
+
+  const latestRequestRef =
+    useRef(0);
+
+
+  const [selectedDate, setSelectedDate] =
+    useState(new Date());
+
+  const [
+    selectedRoomSlug,
+    setSelectedRoomSlug,
+  ] = useState<string | null>(
+    null
+  );
+
+  const [
+    slotsByRoom,
+    setSlotsByRoom,
+  ] = useState<
+    Record<string, Slot[]>
+  >({});
+
+  const [
+    availabilityStatus,
+    setAvailabilityStatus,
+  ] = useState<
+    Record<
+      string,
+      AvailabilityStatus
+    >
+  >({});
+
+  const [
+    isAvailabilityFetching,
+    setIsAvailabilityFetching,
+  ] = useState(false);
+
+  const [resumeBooking, setResumeBooking] =
+    useState<ResumeBooking | null>(null);
+
+  /*
+   * Restore optional room/date from URL.
+   */
+  useEffect(() => {
+    const restoreTimer =
+      window.setTimeout(() => {
+        const searchParams =
+          new URLSearchParams(
+            window.location.search
+          );
+
+        const roomFromUrl =
+          searchParams.get("room");
+
+        const dateFromUrl =
+          searchParams.get("date");
+
+        const validRoom =
+          rooms.some(
+            (room) =>
+              room.slug ===
+              roomFromUrl
+          );
+
+        if (
+          roomFromUrl &&
+          validRoom
+        ) {
+          setSelectedRoomSlug(
+            roomFromUrl
+          );
+        }
+
+        if (dateFromUrl) {
+          const restoredDate =
+            new Date(
+              `${dateFromUrl}T12:00:00`
+            );
+
+          if (
+            !Number.isNaN(
+              restoredDate.getTime()
+            )
+          ) {
+            const today =
+              new Date();
+
+            today.setHours(
+              12,
+              0,
+              0,
+              0
+            );
+
+            restoredDate.setHours(
+              12,
+              0,
+              0,
+              0
+            );
+
+            if (
+              restoredDate >=
+              today
+            ) {
+              setSelectedDate(
+                restoredDate
+              );
+            }
+          }
+        }
+      }, 0);
+
+    return () => {
+      window.clearTimeout(
+        restoreTimer
+      );
+    };
+  }, [rooms]);
+
+  const displayedRooms =
+    useMemo(() => {
+      if (!selectedRoomSlug) {
+        return rooms;
+      }
+
+      const selectedRoom =
+        rooms.find(
+          (room) =>
+            room.slug ===
+            selectedRoomSlug
+        );
+
+      if (!selectedRoom) {
+        return rooms;
+      }
+
+      return [
+        selectedRoom,
+        ...rooms.filter(
+          (room) =>
+            room.slug !==
+            selectedRoomSlug
+        ),
+      ];
+    }, [
+      rooms,
+      selectedRoomSlug,
+    ]);
+
+  const today = new Date();
+
+  today.setHours(
+    12,
+    0,
+    0,
+    0
+  );
+
+  const selectedDay =
+    new Date(selectedDate);
+
+  selectedDay.setHours(
+    12,
+    0,
+    0,
+    0
+  );
+
+  const isToday =
+    formatDateForApi(
+      selectedDay
+    ) ===
+    formatDateForApi(today);
+
+  function clearAvailability() {
+    setSlotsByRoom({});
+    setAvailabilityStatus({});
+  }
+
+  function changeDate(
+    days: number
+  ) {
+    setSelectedDate(
+      (
+        currentDate
+      ) => {
+        const nextDate =
+          new Date(
+            currentDate
+          );
+
+        nextDate.setDate(
+          nextDate.getDate() +
+          days
+        );
+
+        nextDate.setHours(
+          12,
+          0,
+          0,
+          0
+        );
+
+        if (
+          nextDate < today
+        ) {
+          return currentDate;
+        }
+
+        clearAvailability();
+
+        trackClarityEvent(
+          "booking_date_selected"
+        );
+        return nextDate;
+      }
+    );
+  }
+
+  function selectDateFromCalendar(
+    dateString: string
+  ) {
+    if (!dateString) {
+      return;
+    }
+
+    const pickedDate =
+      new Date(
+        `${dateString}T12:00:00`
+      );
+
+    if (
+      Number.isNaN(
+        pickedDate.getTime()
+      ) ||
+      pickedDate < today
+    ) {
+      return;
+    }
+
+    clearAvailability();
+
+    trackClarityEvent(
+      "booking_date_selected"
+    );
+
+    setSelectedDate(
+      pickedDate
+    );
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadResumeBooking() {
+      try {
+        const response =
+          await fetch(
+            "/api/booking-resume",
+            {
+              cache: "no-store",
+            }
+          );
+
+        const data =
+          await response.json();
+
+        if (
+          !cancelled &&
+          response.ok &&
+          data.active &&
+          data.booking?.location ===
+          locationSlug
+        ) {
+          setResumeBooking(
+            data.booking
+          );
+        }
+      } catch {
+        // Resume lookup is optional.
+        // Normal booking flow should still work.
+      }
+    }
+
+    loadResumeBooking();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [locationSlug]);
+
+  /*
+ * Load all room availability with one
+ * Bookeo request for the selected date.
+ */
+  useEffect(() => {
+    const requestId =
+      latestRequestRef.current +
+      1;
+
+    latestRequestRef.current =
+      requestId;
+
+    const controller =
+      new AbortController();
+
+    const signal =
+      controller.signal;
+
+    const debounceTimer =
+      window.setTimeout(
+        async () => {
+          if (
+            signal.aborted ||
+            requestId !==
+            latestRequestRef.current
+          ) {
+            return;
+          }
+
+          setIsAvailabilityFetching(true);
+
+          setSlotsByRoom({});
+
+          setAvailabilityStatus(
+            Object.fromEntries(
+              rooms.map(
+                (room) => [
+                  room.productId,
+                  "loading" as const,
+                ]
+              )
+            )
+          );
+
+          try {
+            const date =
+              formatDateForApi(
+                selectedDate
+              );
+
+            const response =
+              await fetch(
+                `/api/bookeo/availability?date=${encodeURIComponent(
+                  date
+                )}&location=${encodeURIComponent(
+                  locationSlug
+                )}`,
+                {
+                  cache:
+                    "no-store",
+                  signal,
+                }
+              );
+
+            const data =
+              await response
+                .json()
+                .catch(
+                  () => null
+                );
+
+            if (
+              signal.aborted ||
+              requestId !==
+              latestRequestRef.current
+            ) {
+              return;
+            }
+
+            if (!response.ok) {
+              setAvailabilityStatus(
+                Object.fromEntries(
+                  rooms.map(
+                    (room) => [
+                      room.productId,
+                      "error" as const,
+                    ]
+                  )
+                )
+              );
+
+              return;
+            }
+
+            const groupedSlots =
+              data?.data &&
+                typeof data.data ===
+                "object"
+                ? data.data as Record<
+                  string,
+                  Slot[]
+                >
+                : {};
+
+            setSlotsByRoom(
+              Object.fromEntries(
+                rooms.map(
+                  (room) => [
+                    room.productId,
+                    Array.isArray(
+                      groupedSlots[
+                      room.productId
+                      ]
+                    )
+                      ? groupedSlots[
+                      room.productId
+                      ]
+                      : [],
+                  ]
+                )
+              )
+            );
+
+            setAvailabilityStatus(
+              Object.fromEntries(
+                rooms.map(
+                  (room) => [
+                    room.productId,
+                    "loaded" as const,
+                  ]
+                )
+              )
+            );
+          } catch {
+            if (
+              signal.aborted
+            ) {
+              return;
+            }
+
+            setAvailabilityStatus(
+              Object.fromEntries(
+                rooms.map(
+                  (room) => [
+                    room.productId,
+                    "error" as const,
+                  ]
+                )
+              )
+            );
+          } finally {
+            if (
+              !signal.aborted &&
+              requestId ===
+              latestRequestRef.current
+            ) {
+              setIsAvailabilityFetching(
+                false
+              );
+            }
+          }
+        },
+        500
+      );
+
+    return () => {
+      window.clearTimeout(
+        debounceTimer
+      );
+
+      controller.abort();
+    };
+  }, [
+    selectedDate,
+    rooms,
+    locationSlug,
+  ]);
+
+  const formattedDate =
+    selectedDate.toLocaleDateString(
+      "en-US",
+      {
+        weekday:
+          "long",
+        month:
+          "long",
+        day:
+          "numeric",
+      }
+    );
+
+  const dateInputValue =
+    formatDateForApi(
+      selectedDate
+    );
+
+  const todayInputValue =
+    formatDateForApi(
+      today
+    );
+
+  const selectedRoom =
+    rooms.find(
+      (room) =>
+        room.slug ===
+        selectedRoomSlug
+    );
+
+  return (
+    <>
+      <LocationHeader
+        locationName={`${locationData.shortName}, ${locationData.state}`}
+        locationSubtitle={
+          locationData.subtitle
+        }
+        homeHref={
+          locationData.homeHref
+        }
+        roomsHref={
+          locationData.roomsHref
+        }
+        bookHref={
+          locationData.bookHref
+        }
+      />
+
+      <main className="min-h-screen bg-white text-slate-950">
+        <section className="bg-slate-100 px-6 py-6 text-center">
+          <p className="mb-4 text-2xl font-black uppercase tracking-[0.22em] text-orange-500">
+            Book Now
+          </p>
+
+          <h1 className="text-5xl font-black md:text-6xl">
+            {
+              locationData.shortName
+            }
+          </h1>
+
+        </section>
+
+        <section className="mx-auto max-w-7xl px-6 py-3">
+          {resumeBooking && (
+            <div className="mx-auto mb-6 max-w-xl rounded-2xl border-[6px] border-orange-500 bg-orange-50 p-6 text-center">
+              <p className="text-2xl font-black uppercase tracking-wide text-orange-600">
+                Booking in Progress
+              </p>
+
+              <p className="mt-2 font-bold text-slate-700">
+                {resumeBooking.roomName}
+                {" â€” "}
+                {new Date(
+                  `${resumeBooking.date}T12:00:00`
+                ).toLocaleDateString("en-US", {
+                  weekday: "long",
+                  month: "long",
+                  day: "numeric",
+                })}
+                {" at "}
+                {resumeBooking.time}
+              </p>
+
+              <Link
+                href={`/book/payment?sessionId=${encodeURIComponent(
+                  resumeBooking.sessionId
+                )}`}
+                className="mt-3 inline-block rounded bg-orange-500 px-6 py-3 font-black uppercase text-white hover:bg-orange-600"
+              >
+                Continue Booking
+              </Link>
+
+              <p className="mt-2 text-sm font-bold text-slate-600">
+                Or select a new room and time below.
+              </p>
+            </div>
+          )}
+          <div className="sticky top-[76px] z-30 mx-auto mb-8 grid w-full max-w-xl grid-cols-[52px_minmax(0,1fr)_52px] items-center bg-white py-2 text-center shadow-sm">
+            <button
+              type="button"
+              onClick={() =>
+                changeDate(-1)
+              }
+              disabled={
+                isToday ||
+                isAvailabilityFetching
+              }
+              aria-label="Previous day"
+              className="flex h-12 w-12 items-center justify-center rounded-lg text-5xl font-black leading-none hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+            >
+              â€¹
+            </button>
+
+            <div className="min-w-0 px-2 text-center">
+              <p className="text-lg font-black uppercase tracking-[0.14em] text-orange-500 sm:text-xl sm:tracking-[0.18em]">
+                Selected Date
+              </p>
+
+              <div className="mt-1 flex h-12 items-center justify-center px-1">
+                <p className="text-xl font-black leading-tight sm:text-2xl">
+                  {
+                    formattedDate
+                  }
+                </p>
+              </div>
+
+              <button
+                type="button"
+                disabled={
+                  isAvailabilityFetching
+                }
+                onClick={() =>
+                  dateInputRef.current?.showPicker()
+                }
+                aria-label="Choose a date from the calendar"
+                className="mx-auto mt-1 flex h-8 w-8 items-center justify-center rounded-lg text-2xl leading-none hover:bg-slate-100"
+              >
+                ðŸ“…
+              </button>
+
+              <input
+                ref={
+                  dateInputRef
+                }
+                type="date"
+                disabled={isAvailabilityFetching}
+                aria-label="Select booking date"
+                value={
+                  dateInputValue
+                }
+                min={
+                  todayInputValue
+                }
+                onChange={(
+                  event
+                ) =>
+                  selectDateFromCalendar(
+                    event.target
+                      .value
+                  )
+                }
+                className="sr-only"
+              />
+            </div>
+
+            <button
+              type="button"
+              disabled={isAvailabilityFetching}
+              onClick={() =>
+                changeDate(1)
+              }
+              aria-label="Next day"
+              className="flex h-12 w-12 items-center justify-center rounded-lg text-5xl font-black leading-none hover:bg-slate-100"
+            >
+              â€º
+            </button>
+          </div>
+
+          {selectedRoom && (
+            <div className="mb-8 rounded-2xl border-2 border-orange-500 bg-orange-50 px-6 py-5 text-center">
+              <p className="text-sm font-black uppercase tracking-[0.18em] text-orange-500">
+                Your Selected Room
+              </p>
+
+              <p className="mt-2 text-xl font-black text-slate-950">
+                {
+                  selectedRoom.name
+                }
+              </p>
+
+              <p className="mt-1 font-semibold text-slate-600">
+                Choose an available
+                time below.
+              </p>
+            </div>
+          )}
+
+          <div className="grid gap-8 md:grid-cols-2 xl:grid-cols-3">
+            {displayedRooms.map(
+              (room) => {
+                const slots =
+                  slotsByRoom[
+                  room.productId
+                  ] || [];
+
+                const status =
+                  availabilityStatus[
+                  room.productId
+                  ] ??
+                  "loading";
+
+                const isSelectedRoom =
+                  room.slug ===
+                  selectedRoomSlug;
+
+                return (
+                  <article
+                    key={
+                      room.productId
+                    }
+                    className={`relative overflow-hidden rounded-[18px] bg-white shadow-lg ${isSelectedRoom
+                      ? "border-4 border-orange-500"
+                      : "border-2 border-slate-950"
+                      }`}
+                  >
+                    {isSelectedRoom && (
+                      <div className="absolute left-4 top-4 z-20 rounded-full bg-orange-500 px-4 py-2 text-xs font-black uppercase tracking-[0.10em] text-white shadow-lg">
+                        Your Selected
+                        Room
+                      </div>
+                    )}
+
+                    <div className="relative h-56 bg-slate-900">
+                      <Image
+                        src={
+                          room.image
+                        }
+                        alt={
+                          room.name
+                        }
+                        fill
+                        className="object-cover"
+                        sizes="(max-width: 768px) 100vw, 33vw"
+                      />
+
+                      <div className="absolute inset-0 bg-black/25" />
+
+                      <div className="absolute bottom-3 left-3 rounded bg-slate-950/90 px-3 py-1 text-sm font-black text-white">
+                        {
+                          room.displayPrice
+                        }
+                      </div>
+                    </div>
+
+                    <div className="min-h-[400px] border-t-2 border-slate-950 p-5">
+                      <h3 className="mb-1 text-xl font-black uppercase md:min-h-[56px]">
+                        {
+                          room.name
+                        }
+                      </h3>
+
+                      <p className="mb-5 text-sm font-bold text-orange-500">
+                        Select a time
+                        to continue â†“
+                      </p>
+
+                      {status ===
+                        "loading" ? (
+                        <p className="rounded border-2 border-orange-300 bg-orange-50 px-3 py-4 text-center text-sm font-black text-orange-600">
+                          Checking
+                          availability...
+                        </p>
+                      ) : status ===
+                        "error" ? (
+                        <p
+                          role="status"
+                          className="rounded border-2 border-red-300 bg-red-50 px-3 py-4 text-center text-sm font-black text-red-700"
+                        >
+                          Temporarily
+                          unavailable.
+                          Please try
+                          another date
+                          or refresh.
+                        </p>
+                      ) : slots.length ===
+                        0 ? (
+                        <p className="rounded border-2 border-slate-300 px-3 py-4 text-center text-sm font-black text-slate-500">
+                          No times
+                          available
+                        </p>
+                      ) : (
+                        <div className="grid grid-cols-3 gap-3">
+                          {slots.map(
+                            (
+                              slot
+                            ) => {
+                              const isFull =
+                                slot.numSeatsAvailable <=
+                                0;
+
+                              return (
+                                <button
+                                  type="button"
+                                  key={
+                                    slot.eventId
+                                  }
+                                  disabled={
+                                    isFull
+                                  }
+                                  aria-label={
+                                    isFull
+                                      ? `${room.name} at ${formatTime(slot.startTime)} is full`
+                                      : `${room.name} at ${formatTime(slot.startTime)}, ${slot.numSeatsAvailable} seats available`
+                                  }
+                                  onClick={() => {
+                                    if (
+                                      isFull
+                                    ) {
+                                      return;
+                                    }
+
+                                    trackClarityEvent(
+                                      "booking_time_selected"
+                                    );
+
+                                    window.location.href =
+                                      `/book/details` +
+                                      `?location=${encodeURIComponent(
+                                        locationSlug
+                                      )}` +
+                                      `&productId=${encodeURIComponent(
+                                        room.productId
+                                      )}` +
+                                      `&eventId=${encodeURIComponent(
+                                        slot.eventId
+                                      )}` +
+                                      `&date=${encodeURIComponent(
+                                        dateInputValue
+                                      )}` +
+                                      `&time=${encodeURIComponent(
+                                        formatTime(
+                                          slot.startTime
+                                        )
+                                      )}` +
+                                      `&seats=${encodeURIComponent(
+                                        String(
+                                          slot.numSeatsAvailable
+                                        )
+                                      )}`;
+                                  }}
+                                  className={
+                                    isFull
+                                      ? "cursor-not-allowed rounded border-2 border-slate-300 bg-slate-200 px-2 py-3 text-center text-sm font-black text-slate-500"
+                                      : "rounded border-2 border-slate-950 px-2 py-3 text-center text-sm font-black hover:bg-orange-500 hover:text-white"
+                                  }
+                                >
+                                  <span
+                                    className={
+                                      isFull
+                                        ? "text-[9px] font-bold"
+                                        : "text-sm font-black"
+                                    }
+                                  >
+                                    {formatTime(
+                                      slot.startTime
+                                    )}
+                                  </span>
+
+                                  <span
+                                    className={
+                                      isFull
+                                        ? "block text-[9px] font-semibold"
+                                        : "block text-[10px] font-bold"
+                                    }
+                                  >
+                                    {isFull
+                                      ? "FULL"
+                                      : `${slot.numSeatsAvailable} available`}
+                                  </span>
+                                </button>
+                              );
+                            }
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </article>
+                );
+              }
+            )}
+          </div>
+
+          <div className="mt-12 text-center">
+            <Link
+              href={
+                locationData.homeHref
+              }
+              className="inline-block rounded-full border-2 border-slate-950 px-8 py-4 font-black uppercase"
+            >
+              Back to{" "}
+              {
+                locationData.shortName
+              }{" "}
+              Rooms
+            </Link>
+          </div>
+        </section>
+      </main>
+
+      <LocationFooter
+        locationName={
+          locationData.shortName
+        }
+        streetAddress={
+          locationData.streetAddress
+        }
+        cityStateZip={
+          locationData.cityStateZip
+        }
+        phone={
+          locationData.phone
+        }
+        bookHref={
+          locationData.bookHref
+        }
+        roomsHref={
+          locationData.roomsHref
+        }
+      />
+    </>
+  );
+}
+
+===== app\lib\bookeoBookingLookup.ts =====
+import "server-only";
+
+import {
+  LOCATIONS,
+} from "@/app/data/locations";
+
+import {
+  type BookingSession,
+  getEasternDayBounds,
+} from "@/app/lib/booking";
+
+import {
+  fetchAllBookeoBookingPages,
+} from "@/app/lib/bookeoBookingsPagination";
+
+const BOOKEO_KOP_API_KEY =
+  process.env.BOOKEO_KOP_API_KEY;
+
+const BOOKEO_CH_API_KEY =
+  process.env.BOOKEO_CH_API_KEY;
+
+const BOOKEO_SECRET_KEY =
+  process.env.BOOKEO_SECRET_KEY;
+
+const BOOKEO_TIMEOUT_MS = 15_000;
+
+type BookeoBooking = {
+  bookingNumber?: string;
+  externalRef?: string;
+  productId?: string;
+  eventId?: string;
+  canceled?: boolean;
+};
+
+export type BookeoBookingLookupResult =
+  | {
+      ok: true;
+      result: "FOUND";
+      bookingId: string;
+    }
+  | {
+      ok: true;
+      result: "NO_MATCH";
+    }
+  | {
+      ok: true;
+      result: "AMBIGUOUS";
+      matches: number;
+    }
+  | {
+      ok: false;
+      result: "ERROR";
+      message: string;
+    };
+
+function getBookeoApiKey(
+  location: string
+) {
+  return location ===
+    LOCATIONS.cherryHill.slug
+    ? BOOKEO_CH_API_KEY
+    : BOOKEO_KOP_API_KEY;
+}
+
+export async function lookupFinalBookeoBooking(
+  session: BookingSession
+): Promise<BookeoBookingLookupResult> {
+  const BOOKEO_API_KEY =
+    getBookeoApiKey(
+      session.location
+    );
+
+  if (
+    !BOOKEO_API_KEY ||
+    !BOOKEO_SECRET_KEY
+  ) {
+    return {
+      ok: false,
+      result: "ERROR",
+      message:
+        "Bookeo credentials are not configured.",
+    };
+  }
+
+  try {
+    const {
+      startTime,
+      endTime,
+    } =
+      getEasternDayBounds(
+        session.date
+      );
+
+    const url =
+      `https://api.bookeo.com/v2/bookings` +
+      `?startTime=${encodeURIComponent(
+        startTime
+      )}` +
+      `&endTime=${encodeURIComponent(
+        endTime
+      )}` +
+      `&productId=${encodeURIComponent(
+        session.productId
+      )}` +
+      `&includeCanceled=false`;
+
+    const bookingPages =
+      await fetchAllBookeoBookingPages<BookeoBooking>(
+        url,
+        BOOKEO_API_KEY,
+        BOOKEO_SECRET_KEY,
+        BOOKEO_TIMEOUT_MS
+      );
+
+    if (!bookingPages.ok) {
+      return {
+        ok: false,
+        result: "ERROR",
+        message:
+          `Bookeo lookup failed with status ${bookingPages.status}.`,
+      };
+    }
+
+    const matches =
+      bookingPages.bookings.filter(
+        (booking) =>
+          booking.productId ===
+            session.productId &&
+          booking.eventId ===
+            session.eventId &&
+          booking.canceled !== true &&
+          booking.externalRef ===
+            session.checkoutId
+      );
+
+    if (matches.length === 0) {
+      return {
+        ok: true,
+        result: "NO_MATCH",
+      };
+    }
+
+    if (matches.length > 1) {
+      return {
+        ok: true,
+        result: "AMBIGUOUS",
+        matches:
+          matches.length,
+      };
+    }
+
+    const bookingId =
+      String(
+        matches[0].bookingNumber ||
+        ""
+      ).trim();
+
+    if (!bookingId) {
+      return {
+        ok: false,
+        result: "ERROR",
+        message:
+          "Matched Bookeo booking has no booking number.",
+      };
+    }
+
+    return {
+      ok: true,
+      result: "FOUND",
+      bookingId,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      result: "ERROR",
+      message:
+        error instanceof Error
+          ? error.message
+          : "Bookeo lookup failed.",
+    };
+  }
+}
+
+===== app\lib\bookeoBookingsPagination.ts =====
+export type BookeoBookingPageInfo = {
+  totalPages?: number;
+  currentPage?: number;
+  pageNavigationToken?: string;
+};
+
+export type BookeoBookingsPage<T> = {
+  data?: T[];
+  info?: BookeoBookingPageInfo;
+};
+
+type FetchLike = (
+  input: string,
+  init?: RequestInit
+) => Promise<Response>;
+
+const MAX_BOOKEO_RECONCILIATION_PAGES = 100;
+
+export async function fetchAllBookeoBookingPages<T>(
+  initialUrl: string,
+  apiKey: string,
+  secretKey: string,
+  timeoutMs: number,
+  fetchImpl: FetchLike = fetch
+): Promise<{
+  ok: boolean;
+  status: number;
+  bookings: T[];
+}> {
+  const headers = {
+    "X-Bookeo-apiKey": apiKey,
+    "X-Bookeo-secretKey": secretKey,
+  };
+
+  const firstResponse = await fetchImpl(
+    initialUrl,
+    {
+      method: "GET",
+      cache: "no-store",
+      signal: AbortSignal.timeout(timeoutMs),
+      headers,
+    }
+  );
+
+  const firstData =
+    await firstResponse.json() as BookeoBookingsPage<T>;
+
+  if (!firstResponse.ok) {
+    return {
+      ok: false,
+      status: firstResponse.status,
+      bookings: [],
+    };
+  }
+
+  const bookings: T[] =
+    Array.isArray(firstData?.data)
+      ? [...firstData.data]
+      : [];
+
+  const totalPages =
+    Number(firstData?.info?.totalPages || 1);
+
+  if (
+    !Number.isInteger(totalPages) ||
+    totalPages < 1 ||
+    totalPages > MAX_BOOKEO_RECONCILIATION_PAGES
+  ) {
+    return {
+      ok: false,
+      status: 502,
+      bookings: [],
+    };
+  }
+
+  if (totalPages === 1) {
+    return {
+      ok: true,
+      status: firstResponse.status,
+      bookings,
+    };
+  }
+
+  const pageNavigationToken =
+    String(
+      firstData?.info?.pageNavigationToken || ""
+    ).trim();
+
+  if (!pageNavigationToken) {
+    return {
+      ok: false,
+      status: 502,
+      bookings: [],
+    };
+  }
+
+  for (
+    let pageNumber = 2;
+    pageNumber <= totalPages;
+    pageNumber++
+  ) {
+    const pageUrl =
+      `https://api.bookeo.com/v2/bookings` +
+      `?pageNavigationToken=${encodeURIComponent(
+        pageNavigationToken
+      )}` +
+      `&pageNumber=${pageNumber}`;
+
+    const pageResponse =
+      await fetchImpl(
+        pageUrl,
+        {
+          method: "GET",
+          cache: "no-store",
+          signal: AbortSignal.timeout(timeoutMs),
+          headers,
+        }
+      );
+
+    const pageData =
+      await pageResponse.json() as BookeoBookingsPage<T>;
+
+    if (!pageResponse.ok) {
+      return {
+        ok: false,
+        status: pageResponse.status,
+        bookings: [],
+      };
+    }
+
+    if (Array.isArray(pageData?.data)) {
+      bookings.push(...pageData.data);
+    }
+  }
+
+  return {
+    ok: true,
+    status: firstResponse.status,
+    bookings,
+  };
+}
+
+===== app\lib\booking.ts =====
+export type TrustedBookeoHold = {
+  holdId: string;
+  checkoutId: string;
+  promoCode: string;
+  productId: string;
+  eventId: string;
+  players: string;
+  location: string;
+  roomSlug: string;
+  roomName: string;
+  image: string;
+  date: string;
+  time: string;
+  roomCharge: string;
+  promotionDiscount: string;
+  tax: string;
+  total: string;
+  holdExpiration: string;
+  createdAt: number;
+};
+
+export type BookingSession = {
+  sessionId: string;
+  holdId: string;
+  checkoutId: string;
+  promoCode: string;
+  productId: string;
+  eventId: string;
+  players: string;
+  location: string;
+  roomSlug: string;
+  roomName: string;
+  image: string;
+  date: string;
+  time: string;
+  roomCharge: string;
+  promotionDiscount: string;
+  tax: string;
+  total: string;
+  holdExpiration: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  createdAt: number;
+};
+
+export type PaymentSession = {
+  sessionId: string;
+  location: string;
+  roomName: string;
+  image: string;
+  date: string;
+  time: string;
+  players: string;
+  roomCharge: string;
+  promotionDiscount: string;
+  tax: string;
+  total: string;
+  customerName: string;
+};
+
+
+export type PaymentAttempt = {
+  sessionId: string;
+  claimId: string;
+  session: BookingSession;
+  status:
+  | "creating"
+  | "ready"
+  | "paid";
+  token?: string;
+  paymentUrl?: string;
+  tokenIssuedAt?: number;
+  invoiceNumber?: string;
+  transactionId?: string;
+  paidAt?: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type DuplicatePaymentIncident = {
+  sessionId: string;
+  originalTransactionId: string;
+  duplicateTransactionId: string;
+  detectedAt: number;
+  booking: BookingSession;
+};
+
+export type VerifiedPayment = {
+  sessionId: string;
+  transactionId: string;
+  amount: string;
+  transactionStatus: string;
+  verifiedAt: number;
+};
+
+export type AuthorizeEvent = {
+  eventType: string;
+  transactionId: string;
+  sessionId: string;
+  receivedAt: number;
+};
+
+export type FinalizedBooking = {
+  sessionId: string;
+  bookingId: string;
+  transactionId: string;
+  finalizedAt: number;
+};
+
+export type OrphanPayment = {
+  sessionId: string;
+  transactionId: string;
+  amount: string;
+  holdId: string;
+  productId: string;
+  eventId: string;
+  players: string;
+  location: string;
+  date: string;
+  time: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  bookeoError: unknown;
+  createdAt: number;
+  status:
+  | "needs_recovery"
+  | "reconciled"
+  | "recovered";
+  failureType:
+  | "bookeo_rejected"
+  | "uncertain"
+  | "payment_received_pending_finalization";
+};
+
+export function isValidCalendarDate(
+  value: string
+) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+
+  const [year, month, day] =
+    value.split("-").map(Number);
+
+  const date = new Date(
+    Date.UTC(
+      year,
+      month - 1,
+      day
+    )
+  );
+
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
+
+
+const EASTERN_TIME_ZONE = "America/New_York";
+
+function getEasternOffsetAtInstant(
+  instant: Date
+) {
+  const parts =
+    new Intl.DateTimeFormat(
+      "en-US",
+      {
+        timeZone:
+          EASTERN_TIME_ZONE,
+        timeZoneName:
+          "longOffset",
+      }
+    ).formatToParts(instant);
+
+  const offset =
+    parts.find(
+      (part) =>
+        part.type ===
+        "timeZoneName"
+    )?.value;
+
+  if (
+    !offset ||
+    !/^GMT[+-]\d{2}:\d{2}$/.test(
+      offset
+    )
+  ) {
+    throw new Error(
+      "Could not determine America/New_York UTC offset."
+    );
+  }
+
+  return offset.replace(
+    "GMT",
+    ""
+  );
+}
+
+function resolveEasternOffsetForLocalTime(
+  dateString: string,
+  hour: number,
+  minute: number,
+  second: number
+) {
+  if (
+    !isValidCalendarDate(
+      dateString
+    )
+  ) {
+    throw new Error(
+      "Invalid calendar date."
+    );
+  }
+
+  const [year, month, day] =
+    dateString
+      .split("-")
+      .map(Number);
+
+  const localWallClockUtc =
+    Date.UTC(
+      year,
+      month - 1,
+      day,
+      hour,
+      minute,
+      second
+    );
+
+  /*
+   * Resolve the UTC offset for this exact Eastern-local
+   * wall-clock time. Two passes are enough for the
+   * America/New_York DST offsets because midnight and
+   * 23:59:59 are never inside the DST transition gap.
+   */
+  let candidate =
+    new Date(
+      localWallClockUtc
+    );
+
+  for (
+    let attempt = 0;
+    attempt < 2;
+    attempt++
+  ) {
+    const offset =
+      getEasternOffsetAtInstant(
+        candidate
+      );
+
+    const sign =
+      offset.startsWith("-")
+        ? -1
+        : 1;
+
+    const [offsetHours, offsetMinutes] =
+      offset
+        .slice(1)
+        .split(":")
+        .map(Number);
+
+    const totalOffsetMinutes =
+      sign *
+      (
+        offsetHours * 60 +
+        offsetMinutes
+      );
+
+    candidate =
+      new Date(
+        localWallClockUtc -
+        totalOffsetMinutes *
+        60_000
+      );
+  }
+
+  return getEasternOffsetAtInstant(
+    candidate
+  );
+}
+
+export function getTodayEastern() {
+  const parts =
+    new Intl.DateTimeFormat(
+      "en-US",
+      {
+        timeZone:
+          EASTERN_TIME_ZONE,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }
+    ).formatToParts(
+      new Date()
+    );
+
+  const year =
+    parts.find(
+      (part) =>
+        part.type === "year"
+    )?.value;
+
+  const month =
+    parts.find(
+      (part) =>
+        part.type === "month"
+    )?.value;
+
+  const day =
+    parts.find(
+      (part) =>
+        part.type === "day"
+    )?.value;
+
+  if (
+    !year ||
+    !month ||
+    !day
+  ) {
+    throw new Error(
+      "Could not determine the current Eastern date."
+    );
+  }
+
+  return `${year}-${month}-${day}`;
+}
+
+export function getEasternDayBounds(
+  dateString: string
+) {
+  const startOffset =
+    resolveEasternOffsetForLocalTime(
+      dateString,
+      0,
+      0,
+      0
+    );
+
+  const endOffset =
+    resolveEasternOffsetForLocalTime(
+      dateString,
+      23,
+      59,
+      59
+    );
+
+  return {
+    startTime:
+      `${dateString}T00:00:00${startOffset}`,
+    endTime:
+      `${dateString}T23:59:59${endOffset}`,
+  };
+}
+
+export function isValidBookingSessionId(
+  value: string
+) {
+  return /^ERM-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value
+  );
+}
+
+===== app\lib\bookingLedger.ts =====
+import "server-only";
+import { neon } from "@neondatabase/serverless";
+import { BOOKING_STATES } from "./bookingState";
+
+function getSql() {
+  const databaseUrl = process.env.DATABASE_URL;
+
+  if (!databaseUrl) {
+    throw new Error(
+      "DATABASE_URL is not configured."
+    );
+  }
+
+  return neon(databaseUrl);
+}
+
+export type BookingLedgerRecord = {
+  checkoutId: string;
+  holdId: string | null;
+  authorizeTransactionId: string | null;
+  bookeoBookingId: string | null;
+  status: string;
+  errorCode: string | null;
+  errorMessage: string | null;
+  errorData: unknown;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function createBookingLedgerRecord({
+  checkoutId,
+  holdId,
+  status,
+}: {
+  checkoutId: string;
+  holdId?: string | null;
+  status: string;
+}) {
+  const sql = getSql();
+
+  const rows = await sql`
+    INSERT INTO booking_ledger (
+      checkout_id,
+      hold_id,
+      status
+    )
+    VALUES (
+      ${checkoutId},
+      ${holdId ?? null},
+      ${status}
+    )
+    RETURNING *
+  `;
+
+  return rows[0];
+}
+
+export async function getBookingLedgerRecord(
+  checkoutId: string
+) {
+  const sql = getSql();
+
+  const rows = await sql`
+    SELECT *
+    FROM booking_ledger
+    WHERE checkout_id = ${checkoutId}
+    LIMIT 1
+  `;
+
+  return rows[0] ?? null;
+}
+
+export async function updateBookingLedgerRecord({
+  checkoutId,
+  holdId,
+  authorizeTransactionId,
+  bookeoBookingId,
+  status,
+  errorCode,
+  errorMessage,
+  errorData,
+}: {
+  checkoutId: string;
+  holdId?: string | null;
+  authorizeTransactionId?: string | null;
+  bookeoBookingId?: string | null;
+  status?: string;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  errorData?: unknown;
+}) {
+  const sql = getSql();
+
+  const rows = await sql`
+    UPDATE booking_ledger
+    SET
+      hold_id =
+        COALESCE(
+          ${holdId ?? null},
+          hold_id
+        ),
+      authorize_transaction_id =
+        COALESCE(
+          ${authorizeTransactionId ?? null},
+          authorize_transaction_id
+        ),
+      bookeo_booking_id =
+        COALESCE(
+          ${bookeoBookingId ?? null},
+          bookeo_booking_id
+        ),
+      status =
+        COALESCE(
+          ${status ?? null},
+          status
+        ),
+      error_code =
+        COALESCE(
+          ${errorCode ?? null},
+          error_code
+        ),
+      error_message =
+        COALESCE(
+          ${errorMessage ?? null},
+          error_message
+        ),
+      error_data =
+        COALESCE(
+          ${errorData === undefined
+            ? null
+            : JSON.stringify(errorData)}::jsonb,
+          error_data
+        ),
+      updated_at = NOW()
+    WHERE checkout_id = ${checkoutId}
+    RETURNING *
+  `;
+
+  return rows[0] ?? null;
+}
+export async function claimCheckoutForAuthorization(
+  checkoutId: string
+) {
+  const sql = getSql();
+
+  const rows = await sql`
+    UPDATE booking_ledger
+    SET
+      status = ${BOOKING_STATES.AUTHORIZING},
+      updated_at = NOW()
+    WHERE
+      checkout_id = ${checkoutId}
+      AND status = ${BOOKING_STATES.HOLD_CREATED}
+    RETURNING *
+  `;
+
+  return rows[0] ?? null;
+}
+
+export async function markBookingCaptureComplete(
+  checkoutId: string
+) {
+  const sql = getSql();
+
+  const rows = await sql`
+    UPDATE booking_ledger
+    SET
+      status = ${BOOKING_STATES.COMPLETE},
+      error_code = NULL,
+      error_message = NULL,
+      error_data = NULL,
+      updated_at = NOW()
+    WHERE checkout_id = ${checkoutId}
+    RETURNING *
+  `;
+
+  return rows[0] ?? null;
+}
+
+export async function getBookingLedgerRecordByAuthorizeTransactionId(
+  authorizeTransactionId: string
+) {
+  const sql = getSql();
+
+  const rows = await sql`
+    SELECT *
+    FROM booking_ledger
+    WHERE authorize_transaction_id = ${authorizeTransactionId}
+    ORDER BY created_at ASC
+    LIMIT 2
+  `;
+
+  if (rows.length === 0) {
+    return {
+      kind: "NOT_FOUND" as const,
+      record: null,
+    };
+  }
+
+  if (rows.length > 1) {
+    return {
+      kind: "AMBIGUOUS" as const,
+      record: null,
+    };
+  }
+
+  return {
+    kind: "FOUND" as const,
+    record: rows[0],
+  };
+}
+
+===== app\lib\bookingState.ts =====
+export const BOOKING_STATES = {
+  HOLD_CREATED: "HOLD_CREATED",
+  AUTHORIZING: "AUTHORIZING",
+  AUTHORIZED: "AUTHORIZED",
+  BOOKED: "BOOKED",
+  CAPTURE_FAILED: "CAPTURE_FAILED",
+  COMPLETE: "COMPLETE",
+  FAILED: "FAILED",
+  VOIDED: "VOIDED",
+} as const;
+
+export type BookingState =
+  (typeof BOOKING_STATES)[keyof typeof BOOKING_STATES];
+
+const ALLOWED_TRANSITIONS: Record<
+  BookingState,
+  BookingState[]
+> = {
+  HOLD_CREATED: [
+    "AUTHORIZING",
+    "FAILED",
+  ],
+
+  AUTHORIZING: [
+    "AUTHORIZED",
+    "FAILED",
+  ],
+
+  AUTHORIZED: [
+    "BOOKED",
+    "FAILED",
+    "VOIDED",
+  ],
+
+  BOOKED: [
+    "COMPLETE",
+    "CAPTURE_FAILED",
+  ],
+
+  CAPTURE_FAILED: [
+    "COMPLETE",
+    "CAPTURE_FAILED",
+  ],
+
+  COMPLETE: [],
+
+  FAILED: [],
+
+  VOIDED: [],
+};
+
+export function canTransitionBookingState(
+  currentState: BookingState,
+  nextState: BookingState
+) {
+  return ALLOWED_TRANSITIONS[
+    currentState
+  ].includes(nextState);
+}
+
+export function assertBookingStateTransition(
+  currentState: BookingState,
+  nextState: BookingState
+) {
+  if (
+    !canTransitionBookingState(
+      currentState,
+      nextState
+    )
+  ) {
+    throw new Error(
+      `Invalid booking state transition: ${currentState} -> ${nextState}`
+    );
+  }
+}
+
+===== app\lib\bookingTestAccess.ts =====
+import {
+  createHmac,
+  timingSafeEqual,
+} from "crypto";
+
+export const BOOKING_TEST_COOKIE_NAME =
+  "erm_booking_test_access";
+
+const COOKIE_MESSAGE =
+  "escape-room-mystery-booking-test-access-v1";
+
+export function getBookingTestCookieValue() {
+  const secret =
+    process.env
+      .BOOKING_TEST_BYPASS_TOKEN;
+
+  if (!secret) {
+    return null;
+  }
+
+  return createHmac(
+    "sha256",
+    secret.trim()
+  )
+    .update(COOKIE_MESSAGE)
+    .digest("hex");
+}
+
+export function isValidBookingTestCookie(
+  value: string | undefined
+) {
+  if (!value) {
+    return false;
+  }
+
+  const expected =
+    getBookingTestCookieValue();
+
+  if (!expected) {
+    return false;
+  }
+
+  const providedBuffer =
+    Buffer.from(value);
+
+  const expectedBuffer =
+    Buffer.from(expected);
+
+  if (
+    providedBuffer.length !==
+    expectedBuffer.length
+  ) {
+    return false;
+  }
+
+  return timingSafeEqual(
+    providedBuffer,
+    expectedBuffer
+  );
+}
+
+===== app\lib\captureRecovery.ts =====
+import "server-only";
+
+import { Redis } from "@upstash/redis";
+import { Resend } from "resend";
+
+import {
+  captureSandboxAuthorization,
+  getSandboxTransactionState,
+} from "@/app/lib/authorizeSandbox";
+import {
+  markBookingCaptureComplete,
+  updateBookingLedgerRecord,
+} from "@/app/lib/bookingLedger";
+import {
+  BOOKING_STATES,
+} from "@/app/lib/bookingState";
+
+const redis = Redis.fromEnv();
+
+const resend =
+  new Resend(
+    process.env.RESEND_API_KEY
+  );
+
+const CAPTURED_STATUSES =
+  new Set([
+    "capturedPendingSettlement",
+    "settledSuccessfully",
+  ]);
+
+const AUTHORIZED_PENDING_CAPTURE =
+  "authorizedPendingCapture";
+
+const MAX_CAPTURE_RETRIES = 2;
+
+type CaptureRecoverySuccess = {
+  ok: true;
+  transactionId: string;
+  recoveredBy:
+    | "status_check"
+    | "retry_capture";
+  retryAttempts: number;
+};
+
+type CaptureRecoveryFailure = {
+  ok: false;
+  message: string;
+  finalStatus: string | null;
+  retryAttempts: number;
+  alertSent: boolean;
+};
+
+export type CaptureRecoveryResult =
+  | CaptureRecoverySuccess
+  | CaptureRecoveryFailure;
+
+function sleep(
+  milliseconds: number
+) {
+  return new Promise<void>(
+    (resolve) =>
+      setTimeout(
+        resolve,
+        milliseconds
+      )
+  );
+}
+
+async function sendCaptureRecoveryAlert({
+  checkoutId,
+  transactionId,
+  bookeoBookingId,
+  amount,
+  finalStatus,
+  message,
+  retryAttempts,
+}: {
+  checkoutId: string;
+  transactionId: string;
+  bookeoBookingId: string;
+  amount: number;
+  finalStatus: string | null;
+  message: string;
+  retryAttempts: number;
+}) {
+  const alertKey =
+    `capture-recovery-alert-sent:${checkoutId}`;
+
+  const claimed =
+    await redis.set(
+      alertKey,
+      "1",
+      {
+        nx: true,
+        ex:
+          60 *
+          60 *
+          24 *
+          30,
+      }
+    );
+
+  if (claimed !== "OK") {
+    return true;
+  }
+
+  if (!process.env.RESEND_API_KEY) {
+    await redis.del(
+      alertKey
+    );
+
+    console.error(
+      "Capture recovery alert could not be sent because RESEND_API_KEY is not configured.",
+      {
+        checkoutId,
+        transactionId,
+      }
+    );
+
+    return false;
+  }
+
+  try {
+    const { error } =
+      await resend.emails.send({
+        from:
+          "Escape Room Mystery <info@escaperoommystery.com>",
+
+        to: [
+          "info@escaperoommystery.com",
+        ],
+
+        subject:
+          "URGENT: Booked reservation payment capture needs recovery",
+
+        text: `
+A Bookeo booking exists, but Authorize.Net capture recovery was exhausted.
+
+ACTION REQUIRED:
+Verify the Authorize.Net transaction before taking any payment action.
+Do not issue another capture unless Authorize.Net still shows Authorized/Pending Capture.
+
+Checkout ID: ${checkoutId}
+Authorize.Net transaction: ${transactionId}
+Bookeo booking: ${bookeoBookingId}
+Amount: $${amount.toFixed(2)}
+Final Authorize.Net status: ${finalStatus || "unknown"}
+Automatic capture retries attempted: ${retryAttempts}
+
+Last recovery result:
+${message}
+        `.trim(),
+      });
+
+    if (error) {
+      throw new Error(
+        "Capture recovery alert email failed."
+      );
+    }
+
+    return true;
+  } catch (error) {
+    await redis.del(
+      alertKey
+    );
+
+    console.error(
+      "Failed to send capture recovery alert.",
+      {
+        checkoutId,
+        transactionId,
+        error:
+          error instanceof Error
+            ? error.name
+            : "unknown",
+      }
+    );
+
+    return false;
+  }
+}
+
+async function markComplete(
+  checkoutId: string
+) {
+  await markBookingCaptureComplete(
+    checkoutId
+  );
+}
+
+export async function recoverFailedCapture({
+  checkoutId,
+  transactionId,
+  bookeoBookingId,
+  amount,
+}: {
+  checkoutId: string;
+  transactionId: string;
+  bookeoBookingId: string;
+  amount: number;
+}): Promise<CaptureRecoveryResult> {
+  let retryAttempts = 0;
+  let finalStatus:
+    string | null = null;
+  let lastMessage =
+    "Capture recovery did not complete.";
+
+  /*
+   * Safeguard:
+   * every retry is preceded by an independent
+   * Authorize.Net transaction-state lookup.
+   *
+   * We never infer "not captured" from a failed
+   * or timed-out capture request.
+   */
+  for (
+    let recoveryRound = 1;
+    recoveryRound <=
+      MAX_CAPTURE_RETRIES;
+    recoveryRound++
+  ) {
+    await sleep(
+      recoveryRound === 1
+        ? 500
+        : 1000
+    );
+
+    const state =
+      await getSandboxTransactionState(
+        transactionId
+      );
+
+    if (!state.ok) {
+      lastMessage =
+        state.message;
+
+      await updateBookingLedgerRecord({
+        checkoutId,
+        status:
+          BOOKING_STATES.CAPTURE_FAILED,
+        errorCode:
+          `CAPTURE_STATUS_CHECK_${recoveryRound}_FAILED`,
+        errorMessage:
+          state.message,
+        errorData: {
+          authorizeTransactionId:
+            transactionId,
+          bookeoBookingId,
+          recoveryRound,
+          retryAttempts,
+          uncertain:
+            state.uncertain,
+        },
+      });
+
+      /*
+       * No retry is allowed because the gateway
+       * state was not confirmed.
+       *
+       * A later recovery round gets one more
+       * chance to obtain the state.
+       */
+      continue;
+    }
+
+    finalStatus =
+      state.status;
+
+    if (
+      CAPTURED_STATUSES.has(
+        state.status
+      )
+    ) {
+      await markComplete(
+        checkoutId
+      );
+
+      return {
+        ok: true,
+        transactionId:
+          state.transactionId,
+        recoveredBy:
+          "status_check",
+        retryAttempts,
+      };
+    }
+
+    if (
+      state.status !==
+      AUTHORIZED_PENDING_CAPTURE
+    ) {
+      lastMessage =
+        `Authorize.Net transaction status is ${state.status}; automatic capture retry is not permitted.`;
+
+      break;
+    }
+
+    /*
+     * We have now independently confirmed that
+     * the transaction is still authorized and
+     * uncaptured. Only now is a retry allowed.
+     */
+    retryAttempts++;
+
+    const retryResult =
+      await captureSandboxAuthorization(
+        transactionId,
+        amount
+      );
+
+    if (retryResult.ok) {
+      await markComplete(
+        checkoutId
+      );
+
+      return {
+        ok: true,
+        transactionId:
+          retryResult.transactionId,
+        recoveredBy:
+          "retry_capture",
+        retryAttempts,
+      };
+    }
+
+    lastMessage =
+      retryResult.message;
+
+    await updateBookingLedgerRecord({
+      checkoutId,
+      status:
+        BOOKING_STATES.CAPTURE_FAILED,
+      errorCode:
+        retryResult.uncertain
+          ? `CAPTURE_RETRY_${retryAttempts}_UNCERTAIN`
+          : `CAPTURE_RETRY_${retryAttempts}_REJECTED`,
+      errorMessage:
+        retryResult.message,
+      errorData: {
+        authorizeTransactionId:
+          transactionId,
+        bookeoBookingId,
+        retryAttempts,
+        gatewayStatusBeforeRetry:
+          state.status,
+        uncertain:
+          retryResult.uncertain,
+      },
+    });
+
+    /*
+     * Do not immediately retry again.
+     * The next loop begins with another
+     * transaction-state verification.
+     */
+  }
+
+  /*
+   * Final verification before alerting.
+   *
+   * A capture response may have been lost even
+   * though Authorize.Net accepted the capture.
+   * If so, this converts the ledger to COMPLETE
+   * instead of raising a false alarm.
+   */
+  const finalState =
+    await getSandboxTransactionState(
+      transactionId
+    );
+
+  if (finalState.ok) {
+    finalStatus =
+      finalState.status;
+
+    if (
+      CAPTURED_STATUSES.has(
+        finalState.status
+      )
+    ) {
+      await markComplete(
+        checkoutId
+      );
+
+      return {
+        ok: true,
+        transactionId:
+          finalState.transactionId,
+        recoveredBy:
+          "status_check",
+        retryAttempts,
+      };
+    }
+
+    lastMessage =
+      finalState.status ===
+      AUTHORIZED_PENDING_CAPTURE
+        ? `Authorize.Net still reports ${AUTHORIZED_PENDING_CAPTURE} after ${retryAttempts} automatic capture retries.`
+        : `Authorize.Net final transaction status is ${finalState.status}.`;
+  } else {
+    lastMessage =
+      finalState.message;
+  }
+
+  await updateBookingLedgerRecord({
+    checkoutId,
+    status:
+      BOOKING_STATES.CAPTURE_FAILED,
+    errorCode:
+      "CAPTURE_RECOVERY_EXHAUSTED",
+    errorMessage:
+      lastMessage,
+    errorData: {
+      authorizeTransactionId:
+        transactionId,
+      bookeoBookingId,
+      amount,
+      retryAttempts,
+      finalStatus,
+    },
+  });
+
+  /*
+   * Staff alert happens only after all automatic
+   * recovery attempts and the final verification
+   * have been exhausted.
+   */
+  const alertSent =
+    await sendCaptureRecoveryAlert({
+      checkoutId,
+      transactionId,
+      bookeoBookingId,
+      amount,
+      finalStatus,
+      message:
+        lastMessage,
+      retryAttempts,
+    });
+
+  return {
+    ok: false,
+    message:
+      lastMessage,
+    finalStatus,
+    retryAttempts,
+    alertSent,
+  };
+}
+
+===== app\lib\finalBookeoBooking.ts =====
+import "server-only";
+
+import {
+  BOOKEO_PEOPLE_CATEGORY_ID,
+  LOCATIONS,
+} from "@/app/data/locations";
+
+import {
+  type BookingSession,
+} from "@/app/lib/booking";
+
+const BOOKEO_KOP_API_KEY =
+  process.env.BOOKEO_KOP_API_KEY;
+
+const BOOKEO_CH_API_KEY =
+  process.env.BOOKEO_CH_API_KEY;
+
+const BOOKEO_SECRET_KEY =
+  process.env.BOOKEO_SECRET_KEY;
+
+const BOOKEO_TIMEOUT_MS = 15_000;
+
+export type FinalBookeoBookingResult =
+  | {
+    ok: true;
+    bookingId: string;
+  }
+  | {
+    ok: false;
+    reason: "REJECTED";
+    status: number;
+    message: string;
+    data: unknown;
+  }
+  | {
+    ok: false;
+    reason: "UNCERTAIN";
+    message: string;
+    data?: unknown;
+  };
+
+function getBookeoApiKey(
+  location: string
+) {
+  return location ===
+    LOCATIONS.cherryHill.slug
+    ? BOOKEO_CH_API_KEY
+    : BOOKEO_KOP_API_KEY;
+}
+
+export async function createFinalBookeoBooking(
+  session: BookingSession,
+  authorizeTransactionId: string
+): Promise<FinalBookeoBookingResult> {
+  
+  const BOOKEO_API_KEY =
+    getBookeoApiKey(
+      session.location
+    );
+
+  if (
+    !BOOKEO_API_KEY ||
+    !BOOKEO_SECRET_KEY
+  ) {
+    return {
+      ok: false,
+      reason: "UNCERTAIN",
+      message:
+        "Bookeo credentials are not configured.",
+    };
+  }
+
+  const players =
+    Number(session.players);
+
+  if (
+    !Number.isInteger(players) ||
+    players <= 0
+  ) {
+    return {
+      ok: false,
+      reason: "UNCERTAIN",
+      message:
+        "The trusted participant count is invalid.",
+    };
+  }
+
+  const url =
+    `https://api.bookeo.com/v2/bookings` +
+    `?previousHoldId=${encodeURIComponent(
+      session.holdId
+    )}` +
+    `&notifyUsers=false` +
+    `&notifyCustomer=false`;
+
+  try {
+    const response =
+      await fetch(
+        url,
+        {
+          method: "POST",
+          cache: "no-store",
+
+          signal:
+            AbortSignal.timeout(
+              BOOKEO_TIMEOUT_MS
+            ),
+
+          headers: {
+            "Content-Type":
+              "application/json",
+
+            "X-Bookeo-apiKey":
+              BOOKEO_API_KEY,
+
+            "X-Bookeo-secretKey":
+              BOOKEO_SECRET_KEY,
+          },
+
+          body:
+            JSON.stringify({
+              productId:
+                session.productId,
+
+              eventId:
+                session.eventId,
+
+              externalRef:
+                session.checkoutId,
+
+              participants: {
+                numbers: [
+                  {
+                    peopleCategoryId:
+                      BOOKEO_PEOPLE_CATEGORY_ID,
+
+                    number:
+                      players,
+                  },
+                ],
+              },
+
+              customer: {
+                firstName:
+                  session.firstName ||
+                  "",
+
+                lastName:
+                  session.lastName ||
+                  "",
+
+                emailAddress:
+                  session.email ||
+                  "",
+
+                phoneNumbers:
+                  session.phone
+                    ? [
+                      {
+                        number:
+                          session.phone,
+
+                        type:
+                          "mobile",
+                      },
+                    ]
+                    : [],
+              },
+
+              notes: [
+                {
+                  text:
+                    `Authorize.Net authorization ${authorizeTransactionId}`,
+                },
+              ],
+            }),
+        }
+      );
+
+    let data: any = null;
+
+    try {
+      data =
+        await response.json();
+    } catch {
+      data = null;
+    }
+
+    /*
+     * A 4xx response is an explicit Bookeo
+     * rejection. It is safe to treat this as
+     * "booking not created."
+     */
+    if (
+      response.status >= 400 &&
+      response.status < 500
+    ) {
+      return {
+        ok: false,
+        reason: "REJECTED",
+        status:
+          response.status,
+        message:
+          typeof data?.message ===
+            "string"
+            ? data.message
+            : "Bookeo rejected the booking.",
+        data,
+      };
+    }
+
+    /*
+     * 5xx is ambiguous. Bookeo may have
+     * accepted the CREATE before the response
+     * failed, so do not issue another CREATE.
+     */
+    if (!response.ok) {
+      return {
+        ok: false,
+        reason: "UNCERTAIN",
+        message:
+          "Bookeo did not return a confirmed booking result.",
+        data,
+      };
+    }
+
+    const bookingNumber =
+      String(
+        data?.bookingNumber ||
+        ""
+      ).trim();
+
+    /*
+     * A successful HTTP response without a
+     * booking number is also ambiguous.
+     */
+    if (!bookingNumber) {
+      return {
+        ok: false,
+        reason: "UNCERTAIN",
+        message:
+          "Bookeo returned success but no booking number was present.",
+        data,
+      };
+    }
+
+    return {
+      ok: true,
+      bookingId:
+        bookingNumber,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "UNCERTAIN",
+      message:
+        error instanceof Error
+          ? error.message
+          : "Bookeo booking creation returned an uncertain result.",
+    };
+  }
+}

@@ -1,0 +1,101 @@
+﻿              ],
+            }),
+        }
+      );
+
+    const data =
+      await response.json();
+
+    const bookeoResponseAt =
+      Date.now();
+
+    console.info(
+      "BOOKING_TIMELINE",
+      {
+        stage:
+          "bookeo_finalize_response",
+
+        sessionId,
+
+        transactionId:
+          verifiedPayment.transactionId,
+
+        occurredAt:
+          new Date(
+            bookeoResponseAt
+          ).toISOString(),
+
+        durationMs:
+          bookeoResponseAt -
+          bookeoFinalizeStartedAt,
+
+        bookeoStatus:
+          response.status,
+
+        bookeoMessage:
+          typeof data?.message === "string"
+            ? data.message
+            : null,
+
+        bookeoErrorId:
+          data?.errorId != null
+            ? String(data.errorId)
+            : null,
+      }
+    );
+
+    /*
+     * Bookeo explicitly rejected the booking.
+     */
+    if (!response.ok) {
+      const orphan:
+        OrphanPayment = {
+        sessionId,
+
+        transactionId:
+          verifiedPayment.transactionId,
+
+        amount:
+          verifiedPayment.amount,
+
+        holdId:
+          session.holdId,
+
+        productId:
+          session.productId,
+
+        eventId:
+          session.eventId,
+
+        players:
+          session.players,
+
+        location:
+          session.location,
+
+        date:
+          session.date,
+
+        time:
+          session.time,
+
+        firstName:
+          session.firstName,
+
+        lastName:
+          session.lastName,
+
+        email:
+          session.email,
+
+        phone:
+          session.phone,
+
+        bookeoError: {
+          status:
+            response.status,
+        },
+
+        createdAt:
+          Date.now(),
+

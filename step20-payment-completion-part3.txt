@@ -1,0 +1,101 @@
+﻿
+        status:
+          "needs_recovery",
+
+        failureType:
+          "bookeo_rejected",
+      };
+
+      await redis.set(
+        `orphan-payment:${sessionId}`,
+        orphan,
+        {
+          ex:
+            PAYMENT_STATE_TTL_SECONDS,
+        }
+      );
+
+      await sendRecoveryAlert(
+        orphan
+      );
+
+      console.error(
+        "Paid booking requires recovery.",
+        {
+          sessionId,
+          failureType:
+            "bookeo_rejected",
+
+          bookeoStatus:
+            response.status,
+
+          bookeoMessage:
+            typeof data?.message === "string"
+              ? data.message
+              : null,
+
+          bookeoErrorId:
+            data?.errorId != null
+              ? String(data.errorId)
+              : null,
+        }
+      );
+
+      return {
+        ok: false,
+        status: 502,
+        recoveryRequired: true,
+        retryable: false,
+
+        error:
+          "Payment succeeded, but the booking could not be finalized automatically.",
+      };
+    }
+
+    const bookingNumber =
+      String(
+        data?.bookingNumber ||
+        ""
+      );
+
+    if (!bookingNumber) {
+      throw new Error(
+        "Bookeo returned success but no booking number was present."
+      );
+    }
+
+    await redis.set(
+      `bookeo-finalized:${sessionId}`,
+      {
+        sessionId,
+
+        bookingId:
+          bookingNumber,
+
+        transactionId:
+          verifiedPayment.transactionId,
+
+        finalizedAt:
+          Date.now(),
+      },
+      {
+        ex:
+          FINALIZED_BOOKING_TTL_SECONDS,
+      }
+    );
+
+    await redis.del(
+      `orphan-payment:${sessionId}`
+    );
+
+    return {
+      ok: true,
+
+      bookingId:
+        bookingNumber,
+
+      purchase:
+        buildPurchaseAnalytics(
+          session,
+          verifiedPayment.transactionId,
+          verifiedPayment.amount

@@ -1,0 +1,5 @@
+{
+  "projectId": "prj_LnALpfgj4PnRy2kvwbX0RAxWb0Ux",
+  "envVarEnvironments": ["preview", "production"],
+  "makeEnvVarsSensitive": true
+}

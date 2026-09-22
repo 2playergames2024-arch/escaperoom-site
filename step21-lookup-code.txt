@@ -1,0 +1,590 @@
+﻿===== bookeoBookingsPagination.ts =====
+export type BookeoBookingPageInfo = {
+  totalPages?: number;
+  currentPage?: number;
+  pageNavigationToken?: string;
+};
+
+export type BookeoBookingsPage<T> = {
+  data?: T[];
+  info?: BookeoBookingPageInfo;
+};
+
+type FetchLike = (
+  input: string,
+  init?: RequestInit
+) => Promise<Response>;
+
+const MAX_BOOKEO_RECONCILIATION_PAGES = 100;
+
+export async function fetchAllBookeoBookingPages<T>(
+  initialUrl: string,
+  apiKey: string,
+  secretKey: string,
+  timeoutMs: number,
+  fetchImpl: FetchLike = fetch
+): Promise<{
+  ok: boolean;
+  status: number;
+  bookings: T[];
+}> {
+  const headers = {
+    "X-Bookeo-apiKey": apiKey,
+    "X-Bookeo-secretKey": secretKey,
+  };
+
+  const firstResponse = await fetchImpl(
+    initialUrl,
+    {
+      method: "GET",
+      cache: "no-store",
+      signal: AbortSignal.timeout(timeoutMs),
+      headers,
+    }
+  );
+
+  const firstData =
+    await firstResponse.json() as BookeoBookingsPage<T>;
+
+  if (!firstResponse.ok) {
+    return {
+      ok: false,
+      status: firstResponse.status,
+      bookings: [],
+    };
+  }
+
+  const bookings: T[] =
+    Array.isArray(firstData?.data)
+      ? [...firstData.data]
+      : [];
+
+  const totalPages =
+    Number(firstData?.info?.totalPages || 1);
+
+  if (
+    !Number.isInteger(totalPages) ||
+    totalPages < 1 ||
+    totalPages > MAX_BOOKEO_RECONCILIATION_PAGES
+  ) {
+    return {
+      ok: false,
+      status: 502,
+      bookings: [],
+    };
+  }
+
+  if (totalPages === 1) {
+    return {
+      ok: true,
+      status: firstResponse.status,
+      bookings,
+    };
+  }
+
+  const pageNavigationToken =
+    String(
+      firstData?.info?.pageNavigationToken || ""
+    ).trim();
+
+  if (!pageNavigationToken) {
+    return {
+      ok: false,
+      status: 502,
+      bookings: [],
+    };
+  }
+
+  for (
+    let pageNumber = 2;
+    pageNumber <= totalPages;
+    pageNumber++
+  ) {
+    const pageUrl =
+      `https://api.bookeo.com/v2/bookings` +
+      `?pageNavigationToken=${encodeURIComponent(
+        pageNavigationToken
+      )}` +
+      `&pageNumber=${pageNumber}`;
+
+    const pageResponse =
+      await fetchImpl(
+        pageUrl,
+        {
+          method: "GET",
+          cache: "no-store",
+          signal: AbortSignal.timeout(timeoutMs),
+          headers,
+        }
+      );
+
+    const pageData =
+      await pageResponse.json() as BookeoBookingsPage<T>;
+
+    if (!pageResponse.ok) {
+      return {
+        ok: false,
+        status: pageResponse.status,
+        bookings: [],
+      };
+    }
+
+    if (Array.isArray(pageData?.data)) {
+      bookings.push(...pageData.data);
+    }
+  }
+
+  return {
+    ok: true,
+    status: firstResponse.status,
+    bookings,
+  };
+}
+
+===== reconcile booking lookup references =====
+
+  app\api\admin\orphans\reconcile\route.ts:8:import {
+  app\api\admin\orphans\reconcile\route.ts:9:  getEasternDayBounds,
+  app\api\admin\orphans\reconcile\route.ts:10:} from "@/app/lib/booking";
+  app\api\admin\orphans\reconcile\route.ts:11:
+> app\api\admin\orphans\reconcile\route.ts:12:import { fetchAllBookeoBookingPages } from "@/app/lib/bookeoBookingsPagination";
+  app\api\admin\orphans\reconcile\route.ts:13:
+  app\api\admin\orphans\reconcile\route.ts:14:const redis = Redis.fromEnv();
+  app\api\admin\orphans\reconcile\route.ts:15:
+  app\api\admin\orphans\reconcile\route.ts:16:const BOOKEO_KOP_API_KEY =
+  app\api\admin\orphans\reconcile\route.ts:17:  process.env.BOOKEO_KOP_API_KEY;
+  app\api\admin\orphans\reconcile\route.ts:18:
+  app\api\admin\orphans\reconcile\route.ts:29:  sessionId: string;
+  app\api\admin\orphans\reconcile\route.ts:30:  transactionId: string;
+  app\api\admin\orphans\reconcile\route.ts:31:  amount: string;
+  app\api\admin\orphans\reconcile\route.ts:32:  holdId: string;
+> app\api\admin\orphans\reconcile\route.ts:33:  productId: string;
+> app\api\admin\orphans\reconcile\route.ts:34:  eventId: string;
+  app\api\admin\orphans\reconcile\route.ts:35:  players: string;
+  app\api\admin\orphans\reconcile\route.ts:36:  location: string;
+  app\api\admin\orphans\reconcile\route.ts:37:  date: string;
+  app\api\admin\orphans\reconcile\route.ts:38:  time: string;
+  app\api\admin\orphans\reconcile\route.ts:39:  firstName: string;
+  app\api\admin\orphans\reconcile\route.ts:40:  lastName: string;
+  app\api\admin\orphans\reconcile\route.ts:51:    | "uncertain";
+  app\api\admin\orphans\reconcile\route.ts:52:};
+  app\api\admin\orphans\reconcile\route.ts:53:
+  app\api\admin\orphans\reconcile\route.ts:54:type BookeoBooking = {
+> app\api\admin\orphans\reconcile\route.ts:55:  bookingNumber?: string;
+> app\api\admin\orphans\reconcile\route.ts:56:  eventId?: string;
+> app\api\admin\orphans\reconcile\route.ts:57:  productId?: string;
+> app\api\admin\orphans\reconcile\route.ts:58:  startTime?: string;
+  app\api\admin\orphans\reconcile\route.ts:59:  creationTime?: string;
+  app\api\admin\orphans\reconcile\route.ts:60:  title?: string;
+  app\api\admin\orphans\reconcile\route.ts:61:  canceled?: boolean;
+  app\api\admin\orphans\reconcile\route.ts:62:
+  app\api\admin\orphans\reconcile\route.ts:63:  participants?: {
+  app\api\admin\orphans\reconcile\route.ts:64:    numbers?: Array<{
+  app\api\admin\orphans\reconcile\route.ts:246:    ) {
+  app\api\admin\orphans\reconcile\route.ts:247:      return NextResponse.json({
+  app\api\admin\orphans\reconcile\route.ts:248:        result:
+  app\api\admin\orphans\reconcile\route.ts:249:          "already_finalized",
+> app\api\admin\orphans\reconcile\route.ts:250:        bookingNumber:
+  app\api\admin\orphans\reconcile\route.ts:251:          existingFinalization.bookingId,
+  app\api\admin\orphans\reconcile\route.ts:252:      });
+  app\api\admin\orphans\reconcile\route.ts:253:    }
+  app\api\admin\orphans\reconcile\route.ts:254:
+  app\api\admin\orphans\reconcile\route.ts:255:    if (!orphan.date) {
+  app\api\admin\orphans\reconcile\route.ts:256:      return NextResponse.json(
+  app\api\admin\orphans\reconcile\route.ts:264:      );
+  app\api\admin\orphans\reconcile\route.ts:265:    }
+  app\api\admin\orphans\reconcile\route.ts:266:
+  app\api\admin\orphans\reconcile\route.ts:267:    /*
+> app\api\admin\orphans\reconcile\route.ts:268:     * Query Bookeo for bookings on the
+  app\api\admin\orphans\reconcile\route.ts:269:     * scheduled date for this exact product.
+  app\api\admin\orphans\reconcile\route.ts:270:     *
+  app\api\admin\orphans\reconcile\route.ts:271:     * This endpoint NEVER creates a booking.
+  app\api\admin\orphans\reconcile\route.ts:272:     */
+  app\api\admin\orphans\reconcile\route.ts:273:    const {
+> app\api\admin\orphans\reconcile\route.ts:274:      startTime,
+  app\api\admin\orphans\reconcile\route.ts:275:      endTime,
+  app\api\admin\orphans\reconcile\route.ts:276:    } =
+  app\api\admin\orphans\reconcile\route.ts:277:      getEasternDayBounds(
+  app\api\admin\orphans\reconcile\route.ts:278:        orphan.date
+  app\api\admin\orphans\reconcile\route.ts:279:      );
+  app\api\admin\orphans\reconcile\route.ts:280:
+  app\api\admin\orphans\reconcile\route.ts:281:    const url =
+> app\api\admin\orphans\reconcile\route.ts:282:      `https://api.bookeo.com/v2/bookings` +
+> app\api\admin\orphans\reconcile\route.ts:283:      `?startTime=${encodeURIComponent(
+> app\api\admin\orphans\reconcile\route.ts:284:        startTime
+  app\api\admin\orphans\reconcile\route.ts:285:      )}` +
+  app\api\admin\orphans\reconcile\route.ts:286:      `&endTime=${encodeURIComponent(
+  app\api\admin\orphans\reconcile\route.ts:287:        endTime
+  app\api\admin\orphans\reconcile\route.ts:288:      )}` +
+> app\api\admin\orphans\reconcile\route.ts:289:      `&productId=${encodeURIComponent(
+> app\api\admin\orphans\reconcile\route.ts:290:        orphan.productId
+  app\api\admin\orphans\reconcile\route.ts:291:      )}`;
+  app\api\admin\orphans\reconcile\route.ts:292:
+  app\api\admin\orphans\reconcile\route.ts:293:    const bookingPages =
+  app\api\admin\orphans\reconcile\route.ts:294:      await fetchAllBookeoBookingPages<BookeoBooking>(
+  app\api\admin\orphans\reconcile\route.ts:295:        url,
+  app\api\admin\orphans\reconcile\route.ts:296:        BOOKEO_API_KEY,
+  app\api\admin\orphans\reconcile\route.ts:318:        { status: 502 }
+  app\api\admin\orphans\reconcile\route.ts:319:      );
+  app\api\admin\orphans\reconcile\route.ts:320:    }
+  app\api\admin\orphans\reconcile\route.ts:321:
+> app\api\admin\orphans\reconcile\route.ts:322:    const bookings =
+> app\api\admin\orphans\reconcile\route.ts:323:      bookingPages.bookings;
+  app\api\admin\orphans\reconcile\route.ts:324:
+  app\api\admin\orphans\reconcile\route.ts:325:    /*
+> app\api\admin\orphans\reconcile\route.ts:326:     * Match only active bookings for this exact
+  app\api\admin\orphans\reconcile\route.ts:327:     * Bookeo product and event.
+  app\api\admin\orphans\reconcile\route.ts:328:     */
+  app\api\admin\orphans\reconcile\route.ts:329:    const eventMatches =
+> app\api\admin\orphans\reconcile\route.ts:330:      bookings.filter(
+  app\api\admin\orphans\reconcile\route.ts:331:        (booking) =>
+> app\api\admin\orphans\reconcile\route.ts:332:          booking.productId ===
+> app\api\admin\orphans\reconcile\route.ts:333:            orphan.productId &&
+> app\api\admin\orphans\reconcile\route.ts:334:          booking.eventId ===
+> app\api\admin\orphans\reconcile\route.ts:335:            orphan.eventId &&
+  app\api\admin\orphans\reconcile\route.ts:336:          booking.canceled !==
+  app\api\admin\orphans\reconcile\route.ts:337:            true
+  app\api\admin\orphans\reconcile\route.ts:338:      );
+  app\api\admin\orphans\reconcile\route.ts:339:
+  app\api\admin\orphans\reconcile\route.ts:340:    const orphanPlayers =
+  app\api\admin\orphans\reconcile\route.ts:341:      Number(
+  app\api\admin\orphans\reconcile\route.ts:449:
+  app\api\admin\orphans\reconcile\route.ts:450:        candidates:
+  app\api\admin\orphans\reconcile\route.ts:451:          strongMatches.map(
+  app\api\admin\orphans\reconcile\route.ts:452:            (booking) => ({
+> app\api\admin\orphans\reconcile\route.ts:453:              bookingNumber:
+> app\api\admin\orphans\reconcile\route.ts:454:                booking.bookingNumber,
+> app\api\admin\orphans\reconcile\route.ts:455:              eventId:
+> app\api\admin\orphans\reconcile\route.ts:456:                booking.eventId,
+> app\api\admin\orphans\reconcile\route.ts:457:              productId:
+> app\api\admin\orphans\reconcile\route.ts:458:                booking.productId,
+> app\api\admin\orphans\reconcile\route.ts:459:              startTime:
+> app\api\admin\orphans\reconcile\route.ts:460:                booking.startTime,
+  app\api\admin\orphans\reconcile\route.ts:461:              creationTime:
+  app\api\admin\orphans\reconcile\route.ts:462:                booking.creationTime,
+  app\api\admin\orphans\reconcile\route.ts:463:              title:
+  app\api\admin\orphans\reconcile\route.ts:464:                booking.title,
+  app\api\admin\orphans\reconcile\route.ts:465:
+  app\api\admin\orphans\reconcile\route.ts:466:              players:
+  app\api\admin\orphans\reconcile\route.ts:487:
+  app\api\admin\orphans\reconcile\route.ts:488:    const match =
+  app\api\admin\orphans\reconcile\route.ts:489:      strongMatches[0];
+  app\api\admin\orphans\reconcile\route.ts:490:
+> app\api\admin\orphans\reconcile\route.ts:491:    const bookingNumber =
+  app\api\admin\orphans\reconcile\route.ts:492:      String(
+> app\api\admin\orphans\reconcile\route.ts:493:        match.bookingNumber ||
+  app\api\admin\orphans\reconcile\route.ts:494:          ""
+  app\api\admin\orphans\reconcile\route.ts:495:      );
+  app\api\admin\orphans\reconcile\route.ts:496:
+> app\api\admin\orphans\reconcile\route.ts:497:    if (!bookingNumber) {
+  app\api\admin\orphans\reconcile\route.ts:498:      return NextResponse.json(
+  app\api\admin\orphans\reconcile\route.ts:499:        {
+  app\api\admin\orphans\reconcile\route.ts:500:          result:
+  app\api\admin\orphans\reconcile\route.ts:501:            "manual_review_required",
+  app\api\admin\orphans\reconcile\route.ts:502:          error:
+  app\api\admin\orphans\reconcile\route.ts:503:            "Matched Bookeo booking has no booking number.",
+  app\api\admin\orphans\reconcile\route.ts:514:      `bookeo-finalized:${sessionId}`,
+  app\api\admin\orphans\reconcile\route.ts:515:      {
+  app\api\admin\orphans\reconcile\route.ts:516:        sessionId,
+  app\api\admin\orphans\reconcile\route.ts:517:        bookingId:
+> app\api\admin\orphans\reconcile\route.ts:518:          bookingNumber,
+  app\api\admin\orphans\reconcile\route.ts:519:        transactionId:
+  app\api\admin\orphans\reconcile\route.ts:520:          orphan.transactionId,
+  app\api\admin\orphans\reconcile\route.ts:521:        finalizedAt:
+  app\api\admin\orphans\reconcile\route.ts:522:          Date.now(),
+  app\api\admin\orphans\reconcile\route.ts:523:        reconciled:
+  app\api\admin\orphans\reconcile\route.ts:524:          true,
+  app\api\admin\orphans\reconcile\route.ts:537:      {
+  app\api\admin\orphans\reconcile\route.ts:538:        ...orphan,
+  app\api\admin\orphans\reconcile\route.ts:539:        status:
+  app\api\admin\orphans\reconcile\route.ts:540:          "reconciled",
+> app\api\admin\orphans\reconcile\route.ts:541:        reconciledBookingNumber:
+> app\api\admin\orphans\reconcile\route.ts:542:          bookingNumber,
+  app\api\admin\orphans\reconcile\route.ts:543:        reconciledAt:
+  app\api\admin\orphans\reconcile\route.ts:544:          Date.now(),
+  app\api\admin\orphans\reconcile\route.ts:545:      },
+  app\api\admin\orphans\reconcile\route.ts:546:      {
+  app\api\admin\orphans\reconcile\route.ts:547:        ex:
+  app\api\admin\orphans\reconcile\route.ts:548:          60 *
+  app\api\admin\orphans\reconcile\route.ts:555:    return NextResponse.json({
+  app\api\admin\orphans\reconcile\route.ts:556:      result:
+  app\api\admin\orphans\reconcile\route.ts:557:        "reconciled",
+  app\api\admin\orphans\reconcile\route.ts:558:      sessionId,
+> app\api\admin\orphans\reconcile\route.ts:559:      bookingNumber,
+  app\api\admin\orphans\reconcile\route.ts:560:    });
+  app\api\admin\orphans\reconcile\route.ts:561:  } catch (error) {
+  app\api\admin\orphans\reconcile\route.ts:562:    const isTimeout =
+  app\api\admin\orphans\reconcile\route.ts:563:      error instanceof Error &&
+  app\api\admin\orphans\reconcile\route.ts:564:      (
+  app\api\admin\orphans\reconcile\route.ts:565:        error.name ===
+
+
+
+===== recovery booking lookup references =====
+
+  app\api\admin\orphans\recover\route.ts:8:import {
+  app\api\admin\orphans\recover\route.ts:9:  getEasternDayBounds,
+  app\api\admin\orphans\recover\route.ts:10:} from "@/app/lib/booking";
+  app\api\admin\orphans\recover\route.ts:11:
+> app\api\admin\orphans\recover\route.ts:12:import { fetchAllBookeoBookingPages } from "@/app/lib/bookeoBookingsPagination";
+  app\api\admin\orphans\recover\route.ts:13:
+  app\api\admin\orphans\recover\route.ts:14:const redis = Redis.fromEnv();
+  app\api\admin\orphans\recover\route.ts:15:
+  app\api\admin\orphans\recover\route.ts:16:const BOOKEO_KOP_API_KEY =
+  app\api\admin\orphans\recover\route.ts:17:  process.env.BOOKEO_KOP_API_KEY;
+  app\api\admin\orphans\recover\route.ts:18:
+  app\api\admin\orphans\recover\route.ts:40:  sessionId: string;
+  app\api\admin\orphans\recover\route.ts:41:  transactionId: string;
+  app\api\admin\orphans\recover\route.ts:42:  amount: string;
+  app\api\admin\orphans\recover\route.ts:43:  holdId: string;
+> app\api\admin\orphans\recover\route.ts:44:  productId: string;
+> app\api\admin\orphans\recover\route.ts:45:  eventId: string;
+  app\api\admin\orphans\recover\route.ts:46:  players: string;
+  app\api\admin\orphans\recover\route.ts:47:  location: string;
+  app\api\admin\orphans\recover\route.ts:48:  date: string;
+  app\api\admin\orphans\recover\route.ts:49:  time: string;
+  app\api\admin\orphans\recover\route.ts:50:  firstName: string;
+  app\api\admin\orphans\recover\route.ts:51:  lastName: string;
+  app\api\admin\orphans\recover\route.ts:66:  lastReconciledAt?: number;
+  app\api\admin\orphans\recover\route.ts:67:};
+  app\api\admin\orphans\recover\route.ts:68:
+  app\api\admin\orphans\recover\route.ts:69:type BookeoBooking = {
+> app\api\admin\orphans\recover\route.ts:70:  bookingNumber?: string;
+> app\api\admin\orphans\recover\route.ts:71:  eventId?: string;
+> app\api\admin\orphans\recover\route.ts:72:  productId?: string;
+  app\api\admin\orphans\recover\route.ts:73:  canceled?: boolean;
+  app\api\admin\orphans\recover\route.ts:74:
+  app\api\admin\orphans\recover\route.ts:75:  participants?: {
+  app\api\admin\orphans\recover\route.ts:76:    numbers?: Array<{
+  app\api\admin\orphans\recover\route.ts:77:      peopleCategoryId?: string;
+  app\api\admin\orphans\recover\route.ts:78:      number?: number;
+  app\api\admin\orphans\recover\route.ts:274:    }
+  app\api\admin\orphans\recover\route.ts:275:
+  app\api\admin\orphans\recover\route.ts:276:    /*
+  app\api\admin\orphans\recover\route.ts:277:     * Recovery can only occur after reconciliation
+> app\api\admin\orphans\recover\route.ts:278:     * explicitly found zero matching bookings.
+  app\api\admin\orphans\recover\route.ts:279:     */
+  app\api\admin\orphans\recover\route.ts:280:    if (
+  app\api\admin\orphans\recover\route.ts:281:      orphan.lastReconciliationResult !==
+  app\api\admin\orphans\recover\route.ts:282:      "no_match" ||
+  app\api\admin\orphans\recover\route.ts:283:      !orphan.lastReconciledAt
+  app\api\admin\orphans\recover\route.ts:284:    ) {
+  app\api\admin\orphans\recover\route.ts:525:    /*
+  app\api\admin\orphans\recover\route.ts:526:     * CHECK BOOKEO AGAIN INSIDE THE LOCK
+  app\api\admin\orphans\recover\route.ts:527:     */
+  app\api\admin\orphans\recover\route.ts:528:    const {
+> app\api\admin\orphans\recover\route.ts:529:      startTime,
+  app\api\admin\orphans\recover\route.ts:530:      endTime,
+  app\api\admin\orphans\recover\route.ts:531:    } =
+  app\api\admin\orphans\recover\route.ts:532:      getEasternDayBounds(
+  app\api\admin\orphans\recover\route.ts:533:        orphan.date
+  app\api\admin\orphans\recover\route.ts:534:      );
+  app\api\admin\orphans\recover\route.ts:535:
+  app\api\admin\orphans\recover\route.ts:536:    const lookupUrl =
+> app\api\admin\orphans\recover\route.ts:537:      `https://api.bookeo.com/v2/bookings` +
+> app\api\admin\orphans\recover\route.ts:538:      `?startTime=${encodeURIComponent(
+> app\api\admin\orphans\recover\route.ts:539:        startTime
+  app\api\admin\orphans\recover\route.ts:540:      )}` +
+  app\api\admin\orphans\recover\route.ts:541:      `&endTime=${encodeURIComponent(
+  app\api\admin\orphans\recover\route.ts:542:        endTime
+  app\api\admin\orphans\recover\route.ts:543:      )}` +
+> app\api\admin\orphans\recover\route.ts:544:      `&productId=${encodeURIComponent(
+> app\api\admin\orphans\recover\route.ts:545:        orphan.productId
+  app\api\admin\orphans\recover\route.ts:546:      )}`;
+  app\api\admin\orphans\recover\route.ts:547:
+  app\api\admin\orphans\recover\route.ts:548:    let bookingPages: {
+  app\api\admin\orphans\recover\route.ts:549:      ok: boolean;
+  app\api\admin\orphans\recover\route.ts:550:      status: number;
+> app\api\admin\orphans\recover\route.ts:551:      bookings: BookeoBooking[];
+  app\api\admin\orphans\recover\route.ts:552:    };
+  app\api\admin\orphans\recover\route.ts:553:
+  app\api\admin\orphans\recover\route.ts:554:    try {
+  app\api\admin\orphans\recover\route.ts:555:      bookingPages =
+  app\api\admin\orphans\recover\route.ts:556:        await fetchAllBookeoBookingPages<BookeoBooking>(
+  app\api\admin\orphans\recover\route.ts:557:          lookupUrl,
+  app\api\admin\orphans\recover\route.ts:600:        { status: 502 }
+  app\api\admin\orphans\recover\route.ts:601:      );
+  app\api\admin\orphans\recover\route.ts:602:    }
+  app\api\admin\orphans\recover\route.ts:603:
+> app\api\admin\orphans\recover\route.ts:604:    const bookings =
+> app\api\admin\orphans\recover\route.ts:605:      bookingPages.bookings;
+  app\api\admin\orphans\recover\route.ts:606:
+  app\api\admin\orphans\recover\route.ts:607:    const orphanPlayers =
+  app\api\admin\orphans\recover\route.ts:608:      Number(
+  app\api\admin\orphans\recover\route.ts:609:        orphan.players
+  app\api\admin\orphans\recover\route.ts:610:      );
+  app\api\admin\orphans\recover\route.ts:611:
+  app\api\admin\orphans\recover\route.ts:612:    const existingMatches =
+> app\api\admin\orphans\recover\route.ts:613:      bookings.filter(
+  app\api\admin\orphans\recover\route.ts:614:        (booking) => {
+  app\api\admin\orphans\recover\route.ts:615:          if (
+> app\api\admin\orphans\recover\route.ts:616:            booking.productId !==
+> app\api\admin\orphans\recover\route.ts:617:            orphan.productId ||
+> app\api\admin\orphans\recover\route.ts:618:            booking.eventId !==
+> app\api\admin\orphans\recover\route.ts:619:            orphan.eventId ||
+  app\api\admin\orphans\recover\route.ts:620:            booking.canceled ===
+  app\api\admin\orphans\recover\route.ts:621:            true
+  app\api\admin\orphans\recover\route.ts:622:          ) {
+  app\api\admin\orphans\recover\route.ts:623:            return false;
+  app\api\admin\orphans\recover\route.ts:624:          }
+  app\api\admin\orphans\recover\route.ts:625:
+  app\api\admin\orphans\recover\route.ts:668:      if (
+  app\api\admin\orphans\recover\route.ts:669:        existingMatches.length ===
+  app\api\admin\orphans\recover\route.ts:670:        1
+  app\api\admin\orphans\recover\route.ts:671:      ) {
+> app\api\admin\orphans\recover\route.ts:672:        const existingBookingNumber =
+  app\api\admin\orphans\recover\route.ts:673:          String(
+  app\api\admin\orphans\recover\route.ts:674:            existingMatches[0]
+> app\api\admin\orphans\recover\route.ts:675:              .bookingNumber ||
+  app\api\admin\orphans\recover\route.ts:676:            ""
+  app\api\admin\orphans\recover\route.ts:677:          );
+  app\api\admin\orphans\recover\route.ts:678:
+  app\api\admin\orphans\recover\route.ts:679:        if (
+> app\api\admin\orphans\recover\route.ts:680:          !existingBookingNumber
+  app\api\admin\orphans\recover\route.ts:681:        ) {
+  app\api\admin\orphans\recover\route.ts:682:          return NextResponse.json(
+  app\api\admin\orphans\recover\route.ts:683:            {
+  app\api\admin\orphans\recover\route.ts:684:              result:
+  app\api\admin\orphans\recover\route.ts:685:                "manual_review_required",
+  app\api\admin\orphans\recover\route.ts:686:              error:
+  app\api\admin\orphans\recover\route.ts:694:          `bookeo-finalized:${sessionId}`,
+  app\api\admin\orphans\recover\route.ts:695:          {
+  app\api\admin\orphans\recover\route.ts:696:            sessionId,
+  app\api\admin\orphans\recover\route.ts:697:            bookingId:
+> app\api\admin\orphans\recover\route.ts:698:              existingBookingNumber,
+  app\api\admin\orphans\recover\route.ts:699:            transactionId:
+  app\api\admin\orphans\recover\route.ts:700:              orphan.transactionId,
+  app\api\admin\orphans\recover\route.ts:701:            finalizedAt:
+  app\api\admin\orphans\recover\route.ts:702:              Date.now(),
+  app\api\admin\orphans\recover\route.ts:703:            reconciled:
+  app\api\admin\orphans\recover\route.ts:704:              true,
+  app\api\admin\orphans\recover\route.ts:717:          {
+  app\api\admin\orphans\recover\route.ts:718:            ...orphan,
+  app\api\admin\orphans\recover\route.ts:719:            status:
+  app\api\admin\orphans\recover\route.ts:720:              "reconciled",
+> app\api\admin\orphans\recover\route.ts:721:            reconciledBookingNumber:
+> app\api\admin\orphans\recover\route.ts:722:              existingBookingNumber,
+  app\api\admin\orphans\recover\route.ts:723:            reconciledAt:
+  app\api\admin\orphans\recover\route.ts:724:              Date.now(),
+  app\api\admin\orphans\recover\route.ts:725:          },
+  app\api\admin\orphans\recover\route.ts:726:          {
+  app\api\admin\orphans\recover\route.ts:727:            ex:
+  app\api\admin\orphans\recover\route.ts:728:              60 *
+  app\api\admin\orphans\recover\route.ts:735:        return NextResponse.json({
+  app\api\admin\orphans\recover\route.ts:736:          result:
+  app\api\admin\orphans\recover\route.ts:737:            "reconciled",
+  app\api\admin\orphans\recover\route.ts:738:          sessionId,
+> app\api\admin\orphans\recover\route.ts:739:          bookingNumber:
+> app\api\admin\orphans\recover\route.ts:740:            existingBookingNumber,
+  app\api\admin\orphans\recover\route.ts:741:        });
+  app\api\admin\orphans\recover\route.ts:742:      }
+  app\api\admin\orphans\recover\route.ts:743:
+  app\api\admin\orphans\recover\route.ts:744:      return NextResponse.json(
+  app\api\admin\orphans\recover\route.ts:745:        {
+  app\api\admin\orphans\recover\route.ts:746:          result:
+  app\api\admin\orphans\recover\route.ts:747:            "manual_review_required",
+  app\api\admin\orphans\recover\route.ts:748:          error:
+> app\api\admin\orphans\recover\route.ts:749:            "Multiple matching Bookeo bookings exist. Recovery stopped to prevent a duplicate booking.",
+  app\api\admin\orphans\recover\route.ts:750:          matches:
+  app\api\admin\orphans\recover\route.ts:751:            existingMatches.length,
+  app\api\admin\orphans\recover\route.ts:752:        },
+  app\api\admin\orphans\recover\route.ts:753:        { status: 409 }
+  app\api\admin\orphans\recover\route.ts:754:      );
+  app\api\admin\orphans\recover\route.ts:755:    }
+  app\api\admin\orphans\recover\route.ts:767:     * reconciliation result before allowing any
+  app\api\admin\orphans\recover\route.ts:768:     * future recovery attempt.
+  app\api\admin\orphans\recover\route.ts:769:     */
+  app\api\admin\orphans\recover\route.ts:770:    const createUrl =
+> app\api\admin\orphans\recover\route.ts:771:      "https://api.bookeo.com/v2/bookings";
+  app\api\admin\orphans\recover\route.ts:772:
+  app\api\admin\orphans\recover\route.ts:773:    let bookeoResponse: Response;
+  app\api\admin\orphans\recover\route.ts:774:
+  app\api\admin\orphans\recover\route.ts:775:    try {
+  app\api\admin\orphans\recover\route.ts:776:      bookeoResponse =
+  app\api\admin\orphans\recover\route.ts:777:        await fetch(
+  app\api\admin\orphans\recover\route.ts:792:                BOOKEO_SECRET_KEY,
+  app\api\admin\orphans\recover\route.ts:793:            },
+  app\api\admin\orphans\recover\route.ts:794:            body:
+  app\api\admin\orphans\recover\route.ts:795:              JSON.stringify({
+> app\api\admin\orphans\recover\route.ts:796:                productId:
+> app\api\admin\orphans\recover\route.ts:797:                  orphan.productId,
+  app\api\admin\orphans\recover\route.ts:798:
+> app\api\admin\orphans\recover\route.ts:799:                eventId:
+> app\api\admin\orphans\recover\route.ts:800:                  orphan.eventId,
+  app\api\admin\orphans\recover\route.ts:801:
+  app\api\admin\orphans\recover\route.ts:802:                participants: {
+  app\api\admin\orphans\recover\route.ts:803:                  numbers: [
+  app\api\admin\orphans\recover\route.ts:804:                    {
+  app\api\admin\orphans\recover\route.ts:805:                      peopleCategoryId:
+  app\api\admin\orphans\recover\route.ts:806:                        BOOKEO_PEOPLE_CATEGORY_ID,
+  app\api\admin\orphans\recover\route.ts:818:                    "",
+  app\api\admin\orphans\recover\route.ts:819:                  lastName:
+  app\api\admin\orphans\recover\route.ts:820:                    orphan.lastName ||
+  app\api\admin\orphans\recover\route.ts:821:                    "",
+> app\api\admin\orphans\recover\route.ts:822:                  emailAddress:
+  app\api\admin\orphans\recover\route.ts:823:                    orphan.email ||
+  app\api\admin\orphans\recover\route.ts:824:                    "",
+  app\api\admin\orphans\recover\route.ts:825:                  phoneNumbers:
+  app\api\admin\orphans\recover\route.ts:826:                    orphan.phone
+  app\api\admin\orphans\recover\route.ts:827:                      ? [
+  app\api\admin\orphans\recover\route.ts:828:                        {
+  app\api\admin\orphans\recover\route.ts:983:        { status: 502 }
+  app\api\admin\orphans\recover\route.ts:984:      );
+  app\api\admin\orphans\recover\route.ts:985:    }
+  app\api\admin\orphans\recover\route.ts:986:
+> app\api\admin\orphans\recover\route.ts:987:    const bookingNumber =
+  app\api\admin\orphans\recover\route.ts:988:      String(
+  app\api\admin\orphans\recover\route.ts:989:        bookeoData
+> app\api\admin\orphans\recover\route.ts:990:          ?.bookingNumber ||
+  app\api\admin\orphans\recover\route.ts:991:        ""
+  app\api\admin\orphans\recover\route.ts:992:      );
+  app\api\admin\orphans\recover\route.ts:993:
+  app\api\admin\orphans\recover\route.ts:994:    /*
+  app\api\admin\orphans\recover\route.ts:995:     * Even an HTTP success without a booking number
+  app\api\admin\orphans\recover\route.ts:996:     * is treated as uncertain. Do not automatically
+  app\api\admin\orphans\recover\route.ts:997:     * create another booking.
+  app\api\admin\orphans\recover\route.ts:998:     */
+  app\api\admin\orphans\recover\route.ts:999:    if (
+> app\api\admin\orphans\recover\route.ts:1000:      !bookingNumber
+  app\api\admin\orphans\recover\route.ts:1001:    ) {
+  app\api\admin\orphans\recover\route.ts:1002:      await redis.set(
+  app\api\admin\orphans\recover\route.ts:1003:        `orphan-payment:${sessionId}`,
+  app\api\admin\orphans\recover\route.ts:1004:        {
+  app\api\admin\orphans\recover\route.ts:1005:          ...orphan,
+  app\api\admin\orphans\recover\route.ts:1006:
+  app\api\admin\orphans\recover\route.ts:1043:      `bookeo-finalized:${sessionId}`,
+  app\api\admin\orphans\recover\route.ts:1044:      {
+  app\api\admin\orphans\recover\route.ts:1045:        sessionId,
+  app\api\admin\orphans\recover\route.ts:1046:        bookingId:
+> app\api\admin\orphans\recover\route.ts:1047:          bookingNumber,
+  app\api\admin\orphans\recover\route.ts:1048:        transactionId:
+  app\api\admin\orphans\recover\route.ts:1049:          orphan.transactionId,
+  app\api\admin\orphans\recover\route.ts:1050:        finalizedAt:
+  app\api\admin\orphans\recover\route.ts:1051:          Date.now(),
+  app\api\admin\orphans\recover\route.ts:1052:        recovered:
+  app\api\admin\orphans\recover\route.ts:1053:          true,
+  app\api\admin\orphans\recover\route.ts:1066:      {
+  app\api\admin\orphans\recover\route.ts:1067:        ...orphan,
+  app\api\admin\orphans\recover\route.ts:1068:        status:
+  app\api\admin\orphans\recover\route.ts:1069:          "recovered",
+> app\api\admin\orphans\recover\route.ts:1070:        recoveredBookingNumber:
+> app\api\admin\orphans\recover\route.ts:1071:          bookingNumber,
+  app\api\admin\orphans\recover\route.ts:1072:        recoveredAt:
+  app\api\admin\orphans\recover\route.ts:1073:          Date.now(),
+  app\api\admin\orphans\recover\route.ts:1074:      },
+  app\api\admin\orphans\recover\route.ts:1075:      {
+  app\api\admin\orphans\recover\route.ts:1076:        ex:
+  app\api\admin\orphans\recover\route.ts:1077:          60 *
+  app\api\admin\orphans\recover\route.ts:1084:    return NextResponse.json({
+  app\api\admin\orphans\recover\route.ts:1085:      result:
+  app\api\admin\orphans\recover\route.ts:1086:        "recovered",
+  app\api\admin\orphans\recover\route.ts:1087:      sessionId,
+> app\api\admin\orphans\recover\route.ts:1088:      bookingNumber,
+  app\api\admin\orphans\recover\route.ts:1089:    });
+  app\api\admin\orphans\recover\route.ts:1090:  } catch (error) {
+  app\api\admin\orphans\recover\route.ts:1091:    console.error(
+  app\api\admin\orphans\recover\route.ts:1092:      "Orphan recovery request failed.",
+  app\api\admin\orphans\recover\route.ts:1093:      {
+  app\api\admin\orphans\recover\route.ts:1094:        reason:
+
+

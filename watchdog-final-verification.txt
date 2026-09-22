@@ -1,0 +1,2175 @@
+
+============================================================
+FILE: app\api\booking-watchdog\route.ts
+============================================================
+
+import { NextResponse } from "next/server";
+import { randomUUID } from "crypto";
+import { Redis } from "@upstash/redis";
+
+import {
+  type BookingSession,
+  isValidBookingSessionId,
+} from "@/app/lib/booking";
+import {
+  getBookingLedgerRecord,
+  markBookingCaptureComplete,
+  updateBookingLedgerRecord,
+} from "@/app/lib/bookingLedger";
+import {
+  BOOKING_STATES,
+} from "@/app/lib/bookingState";
+import {
+  getAuthorizeTransactionState,
+  voidAuthorizeAuthorization,
+} from "@/app/lib/authorizeSandbox";
+import {
+  findAuthorizeRecentTransactionByInvoiceNumber,
+} from "@/app/lib/authorizeRecentTransactionLookup";
+import {
+  lookupFinalBookeoBooking,
+} from "@/app/lib/bookeoBookingLookup";
+import {
+  cancelBookeoBooking,
+  deleteBookeoHold,
+} from "@/app/lib/bookeoCancellation";
+import {
+  claimBookingWatchdogResolver,
+  clearBookingWatchdogTakeover,
+  releaseBookingWatchdogResolver,
+  requestBookingWatchdogTakeover,
+  waitForPaymentRouteRelease,
+} from "@/app/lib/bookingWatchdog";
+import {
+  logBookingEvent,
+} from "@/app/lib/bookingLog";
+
+const redis = Redis.fromEnv();
+
+const CAPTURED_STATUSES =
+  new Set([
+    "capturedPendingSettlement",
+    "settledSuccessfully",
+  ]);
+
+const AUTHORIZED_PENDING_CAPTURE =
+  "authorizedPendingCapture";
+
+const VOIDED_STATUSES =
+  new Set([
+    "voided",
+    "declined",
+    "expired",
+  ]);
+
+type LedgerRow = {
+  checkout_id?: string;
+  checkoutId?: string;
+  hold_id?: string | null;
+  holdId?: string | null;
+  authorize_transaction_id?: string | null;
+  authorizeTransactionId?: string | null;
+  bookeo_booking_id?: string | null;
+  bookeoBookingId?: string | null;
+  status?: string;
+  error_code?: string | null;
+  errorCode?: string | null;
+};
+
+function getTransactionId(
+  row: LedgerRow | null
+) {
+  return String(
+    row?.authorize_transaction_id ||
+    row?.authorizeTransactionId ||
+    ""
+  ).trim();
+}
+
+function getBookeoBookingId(
+  row: LedgerRow | null
+) {
+  return String(
+    row?.bookeo_booking_id ||
+    row?.bookeoBookingId ||
+    ""
+  ).trim();
+}
+
+function getHoldId(
+  row: LedgerRow | null,
+  session: BookingSession
+) {
+  return String(
+    row?.hold_id ||
+    row?.holdId ||
+    session.holdId ||
+    ""
+  ).trim();
+}
+
+function pendingResponse(
+  message:
+    | string
+    | undefined = undefined
+) {
+  return NextResponse.json({
+    status: "pending",
+    message:
+      message ||
+      "We are still verifying your booking and payment status.",
+  });
+}
+
+async function finishFailure({
+  session,
+  checkoutId,
+  holdId,
+  terminalStatus,
+  errorCode,
+  errorMessage,
+}: {
+  session: BookingSession;
+  checkoutId: string;
+  holdId: string;
+  terminalStatus:
+    | typeof BOOKING_STATES.VOIDED
+    | typeof BOOKING_STATES.FAILED;
+  errorCode: string;
+  errorMessage: string;
+}) {
+  const holdCleanup =
+    await deleteBookeoHold({
+      session,
+      holdId,
+    });
+
+  if (!holdCleanup.ok) {
+    await updateBookingLedgerRecord({
+      checkoutId,
+      errorCode:
+        "WATCHDOG_HOLD_DELETE_UNCONFIRMED",
+      errorMessage:
+        holdCleanup.message,
+      errorData: {
+        uncertain:
+          holdCleanup.uncertain,
+      },
+    });
+
+    return pendingResponse(
+      "The transaction cleanup is still being verified."
+    );
+  }
+
+  await updateBookingLedgerRecord({
+    checkoutId,
+    status:
+      terminalStatus,
+    errorCode,
+    errorMessage,
+  });
+
+  await clearBookingWatchdogTakeover(
+    checkoutId
+  );
+
+  logBookingEvent(
+    "watchdog.failed_cleanly",
+    {
+      sessionId:
+        session.sessionId,
+      checkoutId,
+      holdId:
+        holdId || null,
+      nextStatus:
+        terminalStatus,
+      errorCode,
+    },
+    "warn"
+  );
+
+  return NextResponse.json({
+    status: "failed",
+  });
+}
+
+async function cancelBookingThenFail({
+  session,
+  checkoutId,
+  holdId,
+  bookingId,
+  errorCode,
+  errorMessage,
+}: {
+  session: BookingSession;
+  checkoutId: string;
+  holdId: string;
+  bookingId: string;
+  errorCode: string;
+  errorMessage: string;
+}) {
+  const cancellation =
+    await cancelBookeoBooking({
+      session,
+      bookingId,
+    });
+
+  if (!cancellation.ok) {
+    await updateBookingLedgerRecord({
+      checkoutId,
+      errorCode:
+        "WATCHDOG_BOOKEO_CANCEL_UNCONFIRMED",
+      errorMessage:
+        cancellation.message,
+      errorData: {
+        bookeoBookingId:
+          bookingId,
+        uncertain:
+          cancellation.uncertain,
+      },
+    });
+
+    return pendingResponse(
+      "The booking cleanup is still being verified."
+    );
+  }
+
+  return finishFailure({
+    session,
+    checkoutId,
+    holdId,
+    terminalStatus:
+      BOOKING_STATES.VOIDED,
+    errorCode,
+    errorMessage,
+  });
+}
+
+export async function POST(
+  request: Request
+) {
+  const resolverRequestId =
+    randomUUID();
+
+  let resolverCheckoutId = "";
+
+  try {
+    const body =
+      await request.json();
+
+    const sessionId =
+      String(
+        body.sessionId || ""
+      ).trim();
+
+    if (
+      !isValidBookingSessionId(
+        sessionId
+      )
+    ) {
+      return NextResponse.json(
+        {
+          status: "invalid",
+          error:
+            "Missing or invalid booking session ID.",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    const session =
+      await redis.get<BookingSession>(
+        `booking-session:${sessionId}`
+      );
+
+    if (!session) {
+      return NextResponse.json(
+        {
+          status: "invalid",
+          error:
+            "The booking session could not be found.",
+        },
+        {
+          status: 410,
+        }
+      );
+    }
+
+    const checkoutId =
+      session.checkoutId;
+
+    let ledger =
+      (await getBookingLedgerRecord(
+        checkoutId
+      )) as LedgerRow | null;
+
+    if (!ledger) {
+      return pendingResponse(
+        "The transaction record is still being located."
+      );
+    }
+
+    /*
+     * COMPLETE is durable proof that the normal route
+     * already confirmed Bookeo and Authorize.Net capture.
+     */
+    if (
+      String(ledger.status || "") ===
+      BOOKING_STATES.COMPLETE
+    ) {
+      await clearBookingWatchdogTakeover(
+        checkoutId
+      );
+
+      return NextResponse.json({
+        status: "confirmed",
+        bookingId:
+          getBookeoBookingId(
+            ledger
+          ),
+      });
+    }
+
+    if (
+      String(ledger.status || "") ===
+        BOOKING_STATES.VOIDED ||
+      String(ledger.status || "") ===
+        BOOKING_STATES.FAILED
+    ) {
+      await clearBookingWatchdogTakeover(
+        checkoutId
+      );
+
+      return NextResponse.json({
+        status: "failed",
+      });
+    }
+
+    /*
+     * Only one watchdog request may resolve a checkout at
+     * a time. This prevents two tabs or overlapping retries
+     * from voiding/canceling the same external state.
+     */
+    const resolverOwned =
+      await claimBookingWatchdogResolver(
+        checkoutId,
+        resolverRequestId
+      );
+
+    if (!resolverOwned) {
+      return pendingResponse(
+        "Another verification request is already resolving this checkout."
+      );
+    }
+
+    resolverCheckoutId = checkoutId;
+
+    /*
+     * Ask the synchronous payment route to stop starting
+     * new consequential work. Then wait until its active
+     * ownership key is gone before this watchdog mutates
+     * Bookeo or Authorize.Net.
+     */
+    await requestBookingWatchdogTakeover(
+      checkoutId
+    );
+
+    logBookingEvent(
+      "watchdog.takeover_requested",
+      {
+        sessionId,
+        checkoutId,
+        holdId:
+          session.holdId,
+        previousStatus:
+          String(
+            ledger.status || ""
+          ),
+      },
+      "warn"
+    );
+
+    const routeReleased =
+      await waitForPaymentRouteRelease(
+        checkoutId,
+        20_000
+      );
+
+    if (!routeReleased) {
+      return pendingResponse(
+        "The original payment request is still finishing safely."
+      );
+    }
+
+    /*
+     * The synchronous route may have completed while we
+     * were waiting for ownership to be released.
+     */
+    ledger =
+      (await getBookingLedgerRecord(
+        checkoutId
+      )) as LedgerRow | null;
+
+    if (!ledger) {
+      return pendingResponse();
+    }
+
+    if (
+      String(ledger.status || "") ===
+      BOOKING_STATES.COMPLETE
+    ) {
+      await clearBookingWatchdogTakeover(
+        checkoutId
+      );
+
+      return NextResponse.json({
+        status: "confirmed",
+        bookingId:
+          getBookeoBookingId(
+            ledger
+          ),
+      });
+    }
+
+    if (
+      String(ledger.status || "") ===
+        BOOKING_STATES.VOIDED ||
+      String(ledger.status || "") ===
+        BOOKING_STATES.FAILED
+    ) {
+      await clearBookingWatchdogTakeover(
+        checkoutId
+      );
+
+      return NextResponse.json({
+        status: "failed",
+      });
+    }
+
+    await updateBookingLedgerRecord({
+      checkoutId,
+      errorCode:
+        "WATCHDOG_RESOLVING_TIMEOUT",
+      errorMessage:
+        "The 30-second checkout watchdog is resolving the authoritative Bookeo and Authorize.Net state.",
+    });
+
+    const holdId =
+      getHoldId(
+        ledger,
+        session
+      );
+
+    /*
+     * First determine whether a real Bookeo booking exists.
+     * This lookup is read-only.
+     */
+    const bookeoLookup =
+      await lookupFinalBookeoBooking(
+        session
+      );
+
+    if (!bookeoLookup.ok) {
+      return pendingResponse(
+        "Bookeo could not be reached to verify the reservation."
+      );
+    }
+
+    if (
+      bookeoLookup.result ===
+      "AMBIGUOUS"
+    ) {
+      await updateBookingLedgerRecord({
+        checkoutId,
+        errorCode:
+          "WATCHDOG_MULTIPLE_BOOKEO_MATCHES",
+        errorMessage:
+          "Multiple Bookeo bookings matched the checkout during watchdog resolution.",
+        errorData: {
+          matches:
+            bookeoLookup.matches,
+        },
+      });
+
+      return pendingResponse(
+        "The reservation requires additional verification."
+      );
+    }
+
+    const bookingId =
+      bookeoLookup.result ===
+      "FOUND"
+        ? bookeoLookup.bookingId
+        : "";
+
+    if (bookingId) {
+      await updateBookingLedgerRecord({
+        checkoutId,
+        bookeoBookingId:
+          bookingId,
+      });
+    }
+
+    /*
+     * Recover the Authorize.Net transaction ID if the
+     * original AUTH-ONLY response was lost before it was
+     * persisted to Postgres.
+     */
+    let transactionId =
+      getTransactionId(
+        ledger
+      );
+
+    if (!transactionId) {
+      const invoiceNumber =
+        checkoutId.slice(
+          0,
+          20
+        );
+
+      const invoiceLookup =
+        await findAuthorizeRecentTransactionByInvoiceNumber(
+          invoiceNumber
+        );
+
+      if (!invoiceLookup.ok) {
+        return pendingResponse(
+          "Authorize.Net could not be reached to verify the payment."
+        );
+      }
+
+      if (
+        invoiceLookup.result ===
+        "AMBIGUOUS"
+      ) {
+        await updateBookingLedgerRecord({
+          checkoutId,
+          errorCode:
+            "WATCHDOG_MULTIPLE_AUTHNET_MATCHES",
+          errorMessage:
+            "Multiple Authorize.Net transactions matched the checkout during watchdog resolution.",
+          errorData: {
+            matches:
+              invoiceLookup.matches,
+          },
+        });
+
+        return pendingResponse(
+          "The payment requires additional verification."
+        );
+      }
+
+      if (
+        invoiceLookup.result ===
+        "FOUND"
+      ) {
+        transactionId =
+          invoiceLookup.transactionId;
+
+        await updateBookingLedgerRecord({
+          checkoutId,
+          authorizeTransactionId:
+            transactionId,
+        });
+      }
+    }
+
+    /*
+     * No Authorize.Net transaction exists and no Bookeo
+     * booking exists. Cleanup the temporary hold and
+     * finish as a clean failure.
+     */
+    if (
+      !transactionId &&
+      !bookingId
+    ) {
+      return finishFailure({
+        session,
+        checkoutId,
+        holdId,
+        terminalStatus:
+          BOOKING_STATES.FAILED,
+        errorCode:
+          "WATCHDOG_NO_EXTERNAL_TRANSACTION",
+        errorMessage:
+          "The watchdog confirmed no Authorize.Net transaction and no Bookeo booking.",
+      });
+    }
+
+    /*
+     * A Bookeo booking without a persisted or discoverable
+     * Authorize.Net transaction is abnormal. Do not tell the
+     * customer success or failure until payment state can be
+     * positively determined.
+     */
+    if (
+      !transactionId &&
+      bookingId
+    ) {
+      await updateBookingLedgerRecord({
+        checkoutId,
+        errorCode:
+          "WATCHDOG_BOOKEO_WITHOUT_AUTHNET_ID",
+        errorMessage:
+          "Bookeo contains the booking, but no Authorize.Net transaction could be positively identified.",
+        errorData: {
+          bookeoBookingId:
+            bookingId,
+        },
+      });
+
+      return pendingResponse(
+        "The reservation exists, but payment status still requires verification."
+      );
+    }
+
+    const gatewayState =
+      await getAuthorizeTransactionState(
+        transactionId
+      );
+
+    if (!gatewayState.ok) {
+      return pendingResponse(
+        "Authorize.Net could not be reached to verify the payment."
+      );
+    }
+
+    /*
+     * Both systems positively agree: booking exists and
+     * money is captured. This is a successful checkout.
+     */
+    if (
+      bookingId &&
+      CAPTURED_STATUSES.has(
+        gatewayState.status
+      )
+    ) {
+      await updateBookingLedgerRecord({
+        checkoutId,
+        authorizeTransactionId:
+          transactionId,
+        bookeoBookingId:
+          bookingId,
+      });
+
+      await markBookingCaptureComplete(
+        checkoutId
+      );
+
+      await clearBookingWatchdogTakeover(
+        checkoutId
+      );
+
+      logBookingEvent(
+        "watchdog.confirmed_success",
+        {
+          sessionId,
+          checkoutId,
+          holdId:
+            holdId || null,
+          authorizeTransactionId:
+            transactionId,
+          bookeoBookingId:
+            bookingId,
+          result:
+            gatewayState.status,
+        }
+      );
+
+      return NextResponse.json({
+        status: "confirmed",
+        bookingId,
+      });
+    }
+
+    /*
+     * Bookeo exists but payment is only authorized.
+     * Our agreed timeout policy is to unwind instead of
+     * starting a new capture after watchdog takeover.
+     */
+    if (
+      bookingId &&
+      gatewayState.status ===
+        AUTHORIZED_PENDING_CAPTURE
+    ) {
+      const voidResult =
+        await voidAuthorizeAuthorization(
+          transactionId
+        );
+
+      if (!voidResult.ok) {
+        await updateBookingLedgerRecord({
+          checkoutId,
+          errorCode:
+            "WATCHDOG_VOID_UNCONFIRMED",
+          errorMessage:
+            voidResult.message,
+          errorData: {
+            authorizeTransactionId:
+              transactionId,
+            bookeoBookingId:
+              bookingId,
+            uncertain:
+              voidResult.uncertain,
+          },
+        });
+
+        return pendingResponse(
+          "The payment reversal is still being verified."
+        );
+      }
+
+      return cancelBookingThenFail({
+        session,
+        checkoutId,
+        holdId,
+        bookingId,
+        errorCode:
+          "WATCHDOG_AUTH_VOIDED_BOOKING_CANCELED",
+        errorMessage:
+          "The timed-out checkout was unwound: authorization voided and Bookeo booking canceled.",
+      });
+    }
+
+    /*
+     * No booking exists, but an authorization does.
+     * Void it, release the hold, and fail cleanly.
+     */
+    if (
+      !bookingId &&
+      gatewayState.status ===
+        AUTHORIZED_PENDING_CAPTURE
+    ) {
+      const voidResult =
+        await voidAuthorizeAuthorization(
+          transactionId
+        );
+
+      if (!voidResult.ok) {
+        await updateBookingLedgerRecord({
+          checkoutId,
+          errorCode:
+            "WATCHDOG_ORPHAN_AUTH_VOID_UNCONFIRMED",
+          errorMessage:
+            voidResult.message,
+          errorData: {
+            authorizeTransactionId:
+              transactionId,
+            uncertain:
+              voidResult.uncertain,
+          },
+        });
+
+        return pendingResponse(
+          "The payment reversal is still being verified."
+        );
+      }
+
+      return finishFailure({
+        session,
+        checkoutId,
+        holdId,
+        terminalStatus:
+          BOOKING_STATES.VOIDED,
+        errorCode:
+          "WATCHDOG_ORPHAN_AUTH_VOIDED",
+        errorMessage:
+          "The timed-out checkout had no Bookeo booking and the Authorize.Net authorization was voided.",
+      });
+    }
+
+    /*
+     * Captured/Pending Settlement is still unsettled and
+     * can be voided. This branch is not expected under the
+     * normal architecture, but it closes the orphan-charge
+     * edge case without inviting a second payment.
+     */
+    if (
+      !bookingId &&
+      gatewayState.status ===
+        "capturedPendingSettlement"
+    ) {
+      const voidResult =
+        await voidAuthorizeAuthorization(
+          transactionId
+        );
+
+      if (!voidResult.ok) {
+        await updateBookingLedgerRecord({
+          checkoutId,
+          errorCode:
+            "WATCHDOG_CAPTURED_ORPHAN_VOID_UNCONFIRMED",
+          errorMessage:
+            voidResult.message,
+          errorData: {
+            authorizeTransactionId:
+              transactionId,
+            gatewayStatus:
+              gatewayState.status,
+            uncertain:
+              voidResult.uncertain,
+          },
+        });
+
+        return pendingResponse(
+          "The payment reversal is still being verified."
+        );
+      }
+
+      return finishFailure({
+        session,
+        checkoutId,
+        holdId,
+        terminalStatus:
+          BOOKING_STATES.VOIDED,
+        errorCode:
+          "WATCHDOG_CAPTURED_ORPHAN_VOIDED",
+        errorMessage:
+          "The watchdog found a captured but unsettled payment without a Bookeo booking and confirmed the transaction was voided.",
+      });
+    }
+
+    /*
+     * A settled payment without a Bookeo booking cannot
+     * be voided. Never claim failure here because a refund
+     * would have to be positively completed first.
+     */
+    if (
+      !bookingId &&
+      gatewayState.status ===
+        "settledSuccessfully"
+    ) {
+      await updateBookingLedgerRecord({
+        checkoutId,
+        errorCode:
+          "WATCHDOG_SETTLED_WITHOUT_BOOKEO",
+        errorMessage:
+          "Authorize.Net reports a settled payment but Bookeo has no matching booking. Manual refund/review is required.",
+        errorData: {
+          authorizeTransactionId:
+            transactionId,
+        },
+      });
+
+      return pendingResponse(
+        "Payment was received and the reservation requires additional verification."
+      );
+    }
+
+    /*
+     * AuthNet already says the transaction cannot settle.
+     * If a Bookeo booking exists, cancel it first.
+     */
+    if (
+      VOIDED_STATUSES.has(
+        gatewayState.status
+      )
+    ) {
+      if (bookingId) {
+        return cancelBookingThenFail({
+          session,
+          checkoutId,
+          holdId,
+          bookingId,
+          errorCode:
+            "WATCHDOG_NONPAYABLE_BOOKING_CANCELED",
+          errorMessage:
+            `Authorize.Net reports ${gatewayState.status}; the Bookeo booking was canceled.`,
+        });
+      }
+
+      return finishFailure({
+        session,
+        checkoutId,
+        holdId,
+        terminalStatus:
+          gatewayState.status ===
+          "voided"
+            ? BOOKING_STATES.VOIDED
+            : BOOKING_STATES.FAILED,
+        errorCode:
+          "WATCHDOG_NONPAYABLE_NO_BOOKING",
+        errorMessage:
+          `Authorize.Net reports ${gatewayState.status} and no Bookeo booking exists.`,
+      });
+    }
+
+    await updateBookingLedgerRecord({
+      checkoutId,
+      errorCode:
+        "WATCHDOG_UNHANDLED_GATEWAY_STATUS",
+      errorMessage:
+        `The watchdog could not safely resolve Authorize.Net status ${gatewayState.status}.`,
+      errorData: {
+        authorizeTransactionId:
+          transactionId,
+        bookeoBookingId:
+          bookingId || null,
+        gatewayStatus:
+          gatewayState.status,
+      },
+    });
+
+    return pendingResponse(
+      "The transaction still requires verification."
+    );
+  } catch (error) {
+    console.error(
+      "BOOKING WATCHDOG ERROR",
+      error
+    );
+
+    return NextResponse.json(
+      {
+        status: "pending",
+        error:
+          "The booking status could not be verified yet.",
+      },
+      {
+        status: 500,
+      }
+    );
+  } finally {
+    if (resolverCheckoutId) {
+      try {
+        await releaseBookingWatchdogResolver(
+          resolverCheckoutId,
+          resolverRequestId
+        );
+      } catch (error) {
+        console.error(
+          "Could not release booking watchdog resolver ownership.",
+          error
+        );
+      }
+    }
+  }
+}
+
+
+============================================================
+FILE: app\lib\bookingWatchdog.ts
+============================================================
+
+import "server-only";
+
+import { Redis } from "@upstash/redis";
+
+const redis = Redis.fromEnv();
+
+const ACTIVE_TTL_SECONDS = 120;
+const TAKEOVER_TTL_SECONDS = 5 * 60;
+const RESOLVER_TTL_SECONDS = 5 * 60;
+
+function activeKey(checkoutId: string) {
+  return `booking-watchdog:active:${checkoutId}`;
+}
+
+function takeoverKey(checkoutId: string) {
+  return `booking-watchdog:takeover:${checkoutId}`;
+}
+
+function resolverKey(checkoutId: string) {
+  return `booking-watchdog:resolver:${checkoutId}`;
+}
+
+export async function claimPaymentRouteOwnership(
+  checkoutId: string,
+  requestId: string
+) {
+  const claimed = await redis.set(
+    activeKey(checkoutId),
+    requestId,
+    {
+      nx: true,
+      ex: ACTIVE_TTL_SECONDS,
+    }
+  );
+
+  return claimed === "OK";
+}
+
+export async function releasePaymentRouteOwnership(
+  checkoutId: string,
+  requestId: string
+) {
+  if (!checkoutId || !requestId) {
+    return;
+  }
+
+  const current =
+    await redis.get<string>(
+      activeKey(checkoutId)
+    );
+
+  if (current === requestId) {
+    await redis.del(
+      activeKey(checkoutId)
+    );
+  }
+}
+
+export async function requestBookingWatchdogTakeover(
+  checkoutId: string
+) {
+  await redis.set(
+    takeoverKey(checkoutId),
+    "1",
+    {
+      ex: TAKEOVER_TTL_SECONDS,
+    }
+  );
+}
+
+export async function isBookingWatchdogTakeoverRequested(
+  checkoutId: string
+) {
+  const value =
+    await redis.get<string>(
+      takeoverKey(checkoutId)
+    );
+
+  return value === "1";
+}
+
+export async function isPaymentRouteActive(
+  checkoutId: string
+) {
+  return Boolean(
+    await redis.get<string>(
+      activeKey(checkoutId)
+    )
+  );
+}
+
+export async function waitForPaymentRouteRelease(
+  checkoutId: string,
+  timeoutMs = 20_000
+) {
+  const deadline =
+    Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (
+      !(await isPaymentRouteActive(
+        checkoutId
+      ))
+    ) {
+      return true;
+    }
+
+    await new Promise(
+      (resolve) =>
+        setTimeout(resolve, 250)
+    );
+  }
+
+  return !(
+    await isPaymentRouteActive(
+      checkoutId
+    )
+  );
+}
+
+export async function clearBookingWatchdogTakeover(
+  checkoutId: string
+) {
+  await redis.del(
+    takeoverKey(checkoutId)
+  );
+}
+
+export async function claimBookingWatchdogResolver(
+  checkoutId: string,
+  requestId: string
+) {
+  const claimed = await redis.set(
+    resolverKey(checkoutId),
+    requestId,
+    {
+      nx: true,
+      ex: RESOLVER_TTL_SECONDS,
+    }
+  );
+
+  return claimed === "OK";
+}
+
+export async function releaseBookingWatchdogResolver(
+  checkoutId: string,
+  requestId: string
+) {
+  if (!checkoutId || !requestId) {
+    return;
+  }
+
+  const current =
+    await redis.get<string>(
+      resolverKey(checkoutId)
+    );
+
+  if (current === requestId) {
+    await redis.del(
+      resolverKey(checkoutId)
+    );
+  }
+}
+
+
+============================================================
+FILE: app\lib\authorizeSandbox.ts
+============================================================
+
+import "server-only";
+
+export type AuthorizeEnvironment =
+  | "sandbox"
+  | "production";
+
+export function getAuthorizeEnvironment(): AuthorizeEnvironment {
+  return process.env.AUTHORIZE_ENVIRONMENT ===
+    "production"
+    ? "production"
+    : "sandbox";
+}
+
+export function getAuthorizeGatewayConfig() {
+  const environment =
+    getAuthorizeEnvironment();
+
+  const production =
+    environment === "production";
+
+  const loginId = production
+    ? process.env.AUTHORIZE_LOGIN_ID
+    : process.env.AUTHORIZE_SANDBOX_LOGIN_ID;
+
+  const transactionKey = production
+    ? process.env.AUTHORIZE_TRANSACTION_KEY
+    : process.env.AUTHORIZE_SANDBOX_TRANSACTION_KEY;
+
+  const signatureKey = production
+    ? process.env.AUTHORIZE_SIGNATURE_KEY
+    : process.env.AUTHORIZE_SANDBOX_SIGNATURE_KEY;
+
+  return {
+    environment,
+    loginId,
+    transactionKey,
+    signatureKey,
+    apiUrl: production
+      ? "https://api.authorize.net/xml/v1/request.api"
+      : "https://apitest.authorize.net/xml/v1/request.api",
+  };
+}
+
+export type AuthorizeInvoiceLookupResult =
+  | {
+      ok: true;
+      result: "FOUND";
+      transactionId: string;
+      transactionStatus: string;
+    }
+  | {
+      ok: true;
+      result: "NO_MATCH";
+    }
+  | {
+      ok: true;
+      result: "AMBIGUOUS";
+      matches: number;
+    }
+  | {
+      ok: false;
+      message: string;
+      uncertain: boolean;
+    };
+
+export async function findAuthorizeUnsettledTransactionByInvoiceNumber(
+  invoiceNumber: string
+): Promise<AuthorizeInvoiceLookupResult> {
+  const {
+    loginId,
+    transactionKey,
+    apiUrl,
+    environment,
+  } = getAuthorizeGatewayConfig();
+
+  if (
+    !loginId ||
+    !transactionKey
+  ) {
+    return {
+      ok: false,
+      message:
+        `Authorize.Net ${environment} credentials are not configured.`,
+      uncertain: false,
+    };
+  }
+
+  const normalizedInvoiceNumber =
+    invoiceNumber.trim();
+
+  if (!normalizedInvoiceNumber) {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net invoice number is missing.",
+      uncertain: false,
+    };
+  }
+
+  const PAGE_SIZE = 1000;
+
+  try {
+    const matches: Array<{
+      transId?: string | number;
+      transactionStatus?: string;
+    }> = [];
+
+    for (
+      let offset = 1;
+      ;
+      offset++
+    ) {
+      const response =
+        await fetch(
+          apiUrl,
+          {
+            method: "POST",
+            cache: "no-store",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify({
+              getUnsettledTransactionListRequest: {
+                merchantAuthentication: {
+                  name:
+                    loginId,
+                  transactionKey:
+                    transactionKey,
+                },
+                sorting: {
+                  orderBy:
+                    "submitTimeUTC",
+                  orderDescending:
+                    true,
+                },
+                paging: {
+                  limit: PAGE_SIZE,
+                  offset,
+                },
+              },
+            }),
+            signal:
+              AbortSignal.timeout(
+                15_000
+              ),
+          }
+        );
+
+      if (!response.ok) {
+        return {
+          ok: false,
+          message:
+            "Authorize.Net could not list unsettled transactions.",
+          uncertain: true,
+        };
+      }
+
+      const data =
+        await response.json();
+
+      const transactions =
+        Array.isArray(data?.transactions)
+          ? data.transactions
+          : [];
+
+      for (const transaction of transactions) {
+        if (
+          String(
+            transaction?.invoiceNumber ||
+            ""
+          ).trim() !==
+          normalizedInvoiceNumber
+        ) {
+          continue;
+        }
+
+        matches.push(transaction);
+
+        if (matches.length > 1) {
+          return {
+            ok: true,
+            result: "AMBIGUOUS",
+            matches:
+              matches.length,
+          };
+        }
+      }
+
+      if (transactions.length < PAGE_SIZE) {
+        break;
+      }
+    }
+
+    if (matches.length === 0) {
+      return {
+        ok: true,
+        result: "NO_MATCH",
+      };
+    }
+
+    const transactionId =
+      String(
+        matches[0]?.transId ||
+        ""
+      ).trim();
+
+    if (
+      !transactionId ||
+      transactionId === "0"
+    ) {
+      return {
+        ok: false,
+        message:
+          "Authorize.Net found the invoice but did not return a usable transaction ID.",
+        uncertain: true,
+      };
+    }
+
+    return {
+      ok: true,
+      result: "FOUND",
+      transactionId,
+      transactionStatus:
+        String(
+          matches[0]?.transactionStatus ||
+          ""
+        ),
+    };
+  } catch {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net could not confirm the unsettled transaction list.",
+      uncertain: true,
+    };
+  }
+}
+
+export type VoidAuthorizationResult =
+  | {
+      ok: true;
+      transactionId: string;
+    }
+  | {
+      ok: false;
+      message: string;
+      uncertain: boolean;
+    };
+
+export async function voidAuthorizeAuthorization(
+  transactionId: string
+): Promise<VoidAuthorizationResult> {
+  const {
+    loginId,
+    transactionKey,
+    apiUrl,
+    environment,
+  } = getAuthorizeGatewayConfig();
+
+  if (
+    !loginId ||
+    !transactionKey
+  ) {
+    return {
+      ok: false,
+      message:
+        `Authorize.Net ${environment} credentials are not configured.`,
+      uncertain: false,
+    };
+  }
+
+  try {
+    const response =
+      await fetch(
+        apiUrl,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            createTransactionRequest: {
+              merchantAuthentication: {
+                name:
+                  loginId,
+                transactionKey:
+                  transactionKey,
+              },
+              transactionRequest: {
+                transactionType:
+                  "voidTransaction",
+                refTransId:
+                  transactionId,
+              },
+            },
+          }),
+          signal:
+            AbortSignal.timeout(
+              15_000
+            ),
+        }
+      );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        message:
+          "Authorize.Net did not confirm the void.",
+        uncertain: true,
+      };
+    }
+
+    const data =
+      await response.json();
+
+    const transactionResponse =
+      data?.transactionResponse;
+
+    const responseCode =
+      String(
+        transactionResponse
+          ?.responseCode || ""
+      );
+
+    const voidTransactionId =
+      String(
+        transactionResponse
+          ?.transId ||
+        transactionId
+      );
+
+    const message =
+      String(
+        transactionResponse
+          ?.messages?.[0]
+          ?.description ||
+        transactionResponse
+          ?.errors?.[0]
+          ?.errorText ||
+        data
+          ?.messages?.message?.[0]
+          ?.text ||
+        "Authorize.Net did not confirm the void."
+      );
+
+    if (responseCode === "1") {
+      return {
+        ok: true,
+        transactionId:
+          voidTransactionId,
+      };
+    }
+
+    return {
+      ok: false,
+      message,
+      uncertain: false,
+    };
+  } catch {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net did not confirm the void.",
+      uncertain: true,
+    };
+  }
+}
+
+export type CaptureAuthorizationResult =
+  | {
+      ok: true;
+      transactionId: string;
+    }
+  | {
+      ok: false;
+      message: string;
+      uncertain: boolean;
+    };
+
+export async function captureAuthorizeAuthorization(
+  transactionId: string,
+  amount: number
+): Promise<CaptureAuthorizationResult> {
+  const {
+    loginId,
+    transactionKey,
+    apiUrl,
+    environment,
+  } = getAuthorizeGatewayConfig();
+
+  if (
+    !loginId ||
+    !transactionKey
+  ) {
+    return {
+      ok: false,
+      message:
+        `Authorize.Net ${environment} credentials are not configured.`,
+      uncertain: false,
+    };
+  }
+
+  try {
+    const response =
+      await fetch(
+        apiUrl,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            createTransactionRequest: {
+              merchantAuthentication: {
+                name:
+                  loginId,
+                transactionKey:
+                  transactionKey,
+              },
+              transactionRequest: {
+                transactionType:
+                  "priorAuthCaptureTransaction",
+                amount:
+                  amount.toFixed(2),
+                refTransId:
+                  transactionId,
+              },
+            },
+          }),
+          signal:
+            AbortSignal.timeout(
+              15_000
+            ),
+        }
+      );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        message:
+          "Authorize.Net did not return a confirmed capture result.",
+        uncertain: true,
+      };
+    }
+
+    const data =
+      await response.json();
+
+    const transactionResponse =
+      data?.transactionResponse;
+
+    const responseCode =
+      String(
+        transactionResponse
+          ?.responseCode || ""
+      );
+
+    const captureTransactionId =
+      String(
+        transactionResponse
+          ?.transId ||
+        transactionId
+      );
+
+    const message =
+      String(
+        transactionResponse
+          ?.messages?.[0]
+          ?.description ||
+        transactionResponse
+          ?.errors?.[0]
+          ?.errorText ||
+        data
+          ?.messages?.message?.[0]
+          ?.text ||
+        "Authorize.Net did not confirm the capture."
+      );
+
+    if (responseCode === "1") {
+      return {
+        ok: true,
+        transactionId:
+          captureTransactionId,
+      };
+    }
+
+    return {
+      ok: false,
+      message,
+      uncertain: false,
+    };
+  } catch {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net did not return a confirmed capture result.",
+      uncertain: true,
+    };
+  }
+}
+
+export type AuthorizeTransactionStateResult =
+  | {
+      ok: true;
+      transactionId: string;
+      status: string;
+      authorizedAmount: number | null;
+      settledAmount: number | null;
+    }
+  | {
+      ok: false;
+      message: string;
+      uncertain: boolean;
+    };
+
+export async function getAuthorizeTransactionState(
+  transactionId: string
+): Promise<AuthorizeTransactionStateResult> {
+  const {
+    loginId,
+    transactionKey,
+    apiUrl,
+    environment,
+  } = getAuthorizeGatewayConfig();
+
+  if (
+    !loginId ||
+    !transactionKey
+  ) {
+    return {
+      ok: false,
+      message:
+        `Authorize.Net ${environment} credentials are not configured.`,
+      uncertain: false,
+    };
+  }
+
+  try {
+    const response =
+      await fetch(
+        apiUrl,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            getTransactionDetailsRequest: {
+              merchantAuthentication: {
+                name:
+                  loginId,
+                transactionKey:
+                  transactionKey,
+              },
+              transId:
+                transactionId,
+            },
+          }),
+          signal:
+            AbortSignal.timeout(
+              15_000
+            ),
+        }
+      );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        message:
+          "Authorize.Net did not return transaction details.",
+        uncertain: true,
+      };
+    }
+
+    const data =
+      await response.json();
+
+    const transaction =
+      data?.transaction;
+
+    const status =
+      String(
+        transaction
+          ?.transactionStatus || ""
+      );
+
+    const returnedTransactionId =
+      String(
+        transaction?.transId ||
+        transactionId
+      );
+
+    if (!transaction || !status) {
+      const message =
+        String(
+          data
+            ?.messages?.message?.[0]
+            ?.text ||
+          "Authorize.Net did not return a usable transaction status."
+        );
+
+      return {
+        ok: false,
+        message,
+        uncertain: false,
+      };
+    }
+
+    const authAmount =
+      Number(
+        transaction?.authAmount
+      );
+
+    const settleAmount =
+      Number(
+        transaction?.settleAmount
+      );
+
+    return {
+      ok: true,
+      transactionId:
+        returnedTransactionId,
+      status,
+      authorizedAmount:
+        Number.isFinite(authAmount)
+          ? authAmount
+          : null,
+      settledAmount:
+        Number.isFinite(settleAmount)
+          ? settleAmount
+          : null,
+    };
+  } catch {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net transaction status could not be confirmed.",
+      uncertain: true,
+    };
+  }
+}
+
+// Backward-compatible aliases for any older imports that
+// have not yet been renamed.
+export const findSandboxUnsettledTransactionByInvoiceNumber =
+  findAuthorizeUnsettledTransactionByInvoiceNumber;
+export const voidSandboxAuthorization =
+  voidAuthorizeAuthorization;
+export const captureSandboxAuthorization =
+  captureAuthorizeAuthorization;
+export const getSandboxTransactionState =
+  getAuthorizeTransactionState;
+export type SandboxInvoiceLookupResult =
+  AuthorizeInvoiceLookupResult;
+export type SandboxTransactionStateResult =
+  AuthorizeTransactionStateResult;
+
+
+============================================================
+FILE: app\lib\authorizeRecentTransactionLookup.ts
+============================================================
+
+import "server-only";
+
+import {
+  findAuthorizeUnsettledTransactionByInvoiceNumber,
+  getAuthorizeGatewayConfig,
+} from "@/app/lib/authorizeSandbox";
+
+export type AuthorizeRecentTransactionLookupResult =
+  | {
+      ok: true;
+      result: "FOUND";
+      transactionId: string;
+      transactionStatus: string;
+    }
+  | {
+      ok: true;
+      result: "NO_MATCH";
+    }
+  | {
+      ok: true;
+      result: "AMBIGUOUS";
+      matches: number;
+    }
+  | {
+      ok: false;
+      message: string;
+      uncertain: boolean;
+    };
+
+type JsonRecord = Record<string, unknown>;
+
+type SettledMatch = {
+  transactionId: string;
+  transactionStatus: string;
+};
+
+const TRANSACTION_PAGE_SIZE = 1000;
+
+function asRecord(value: unknown): JsonRecord | null {
+  return value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+    ? (value as JsonRecord)
+    : null;
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ||
+    typeof value === "number"
+    ? String(value).trim()
+    : "";
+}
+
+async function postAuthorizeRequest(
+  apiUrl: string,
+  body: JsonRecord
+): Promise<
+  | {
+      ok: true;
+      data: JsonRecord;
+    }
+  | {
+      ok: false;
+      message: string;
+    }
+> {
+  try {
+    const response = await fetch(
+      apiUrl,
+      {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          "Content-Type":
+            "application/json",
+        },
+        body: JSON.stringify(body),
+        signal:
+          AbortSignal.timeout(
+            15_000
+          ),
+      }
+    );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        message:
+          `Authorize.Net reporting request returned HTTP ${response.status}.`,
+      };
+    }
+
+    const parsed: unknown =
+      await response.json();
+
+    const data =
+      asRecord(parsed);
+
+    if (!data) {
+      return {
+        ok: false,
+        message:
+          "Authorize.Net returned an invalid reporting response.",
+      };
+    }
+
+    const messages =
+      asRecord(data.messages);
+
+    const resultCode =
+      stringValue(
+        messages?.resultCode
+      );
+
+    if (
+      resultCode &&
+      resultCode.toLowerCase() !== "ok"
+    ) {
+      return {
+        ok: false,
+        message:
+          "Authorize.Net reporting request did not complete successfully.",
+      };
+    }
+
+    return {
+      ok: true,
+      data,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Authorize.Net reporting request could not be completed.",
+    };
+  }
+}
+
+export async function findAuthorizeRecentTransactionByInvoiceNumber(
+  invoiceNumber: string
+): Promise<AuthorizeRecentTransactionLookupResult> {
+  const normalizedInvoiceNumber =
+    invoiceNumber.trim();
+
+  if (!normalizedInvoiceNumber) {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net invoice number is missing.",
+      uncertain: false,
+    };
+  }
+
+  /*
+   * First search the normal unsettled list. This is the
+   * expected location for a transaction only seconds old.
+   */
+  const unsettled =
+    await findAuthorizeUnsettledTransactionByInvoiceNumber(
+      normalizedInvoiceNumber
+    );
+
+  if (
+    !unsettled.ok ||
+    unsettled.result !== "NO_MATCH"
+  ) {
+    return unsettled;
+  }
+
+  /*
+   * NO_MATCH in the unsettled list alone is not proof that
+   * no transaction exists. A transaction could cross the
+   * settlement boundary while the checkout is being resolved.
+   * Search recently settled batches before returning NO_MATCH.
+   */
+  const {
+    loginId,
+    transactionKey,
+    apiUrl,
+  } = getAuthorizeGatewayConfig();
+
+  if (
+    !loginId ||
+    !transactionKey
+  ) {
+    return {
+      ok: false,
+      message:
+        "Authorize.Net credentials are not configured.",
+      uncertain: false,
+    };
+  }
+
+  const now = new Date();
+  const firstSettlementDate =
+    new Date(
+      now.getTime() -
+      48 * 60 * 60 * 1000
+    );
+
+  const batchResponse =
+    await postAuthorizeRequest(
+      apiUrl,
+      {
+        getSettledBatchListRequest: {
+          merchantAuthentication: {
+            name: loginId,
+            transactionKey,
+          },
+          includeStatistics: false,
+          firstSettlementDate:
+            firstSettlementDate.toISOString(),
+          lastSettlementDate:
+            now.toISOString(),
+        },
+      }
+    );
+
+  if (!batchResponse.ok) {
+    return {
+      ok: false,
+      message:
+        batchResponse.message,
+      uncertain: true,
+    };
+  }
+
+  const batchList =
+    asArray(
+      batchResponse.data.batchList
+    );
+
+  const matches: SettledMatch[] = [];
+
+  for (const batchValue of batchList) {
+    const batch =
+      asRecord(batchValue);
+
+    const batchId =
+      stringValue(
+        batch?.batchId
+      );
+
+    if (!batchId) {
+      continue;
+    }
+
+    for (
+      let offset = 1;
+      ;
+      offset++
+    ) {
+      const transactionResponse =
+        await postAuthorizeRequest(
+          apiUrl,
+          {
+            getTransactionListRequest: {
+              merchantAuthentication: {
+                name: loginId,
+                transactionKey,
+              },
+              batchId,
+              sorting: {
+                orderBy:
+                  "submitTimeUTC",
+                orderDescending:
+                  true,
+              },
+              paging: {
+                limit:
+                  TRANSACTION_PAGE_SIZE,
+                offset,
+              },
+            },
+          }
+        );
+
+      if (!transactionResponse.ok) {
+        return {
+          ok: false,
+          message:
+            transactionResponse.message,
+          uncertain: true,
+        };
+      }
+
+      const transactions =
+        asArray(
+          transactionResponse.data.transactions
+        );
+
+      for (
+        const transactionValue
+        of transactions
+      ) {
+        const transaction =
+          asRecord(
+            transactionValue
+          );
+
+        if (!transaction) {
+          continue;
+        }
+
+        if (
+          stringValue(
+            transaction.invoiceNumber
+          ) !== normalizedInvoiceNumber
+        ) {
+          continue;
+        }
+
+        const transactionId =
+          stringValue(
+            transaction.transId
+          );
+
+        if (!transactionId) {
+          continue;
+        }
+
+        matches.push({
+          transactionId,
+          transactionStatus:
+            stringValue(
+              transaction.transactionStatus
+            ),
+        });
+
+        if (matches.length > 1) {
+          return {
+            ok: true,
+            result: "AMBIGUOUS",
+            matches:
+              matches.length,
+          };
+        }
+      }
+
+      if (
+        transactions.length <
+        TRANSACTION_PAGE_SIZE
+      ) {
+        break;
+      }
+    }
+  }
+
+  if (matches.length === 0) {
+    return {
+      ok: true,
+      result: "NO_MATCH",
+    };
+  }
+
+  if (matches.length > 1) {
+    return {
+      ok: true,
+      result: "AMBIGUOUS",
+      matches:
+        matches.length,
+    };
+  }
+
+  return {
+    ok: true,
+    result: "FOUND",
+    transactionId:
+      matches[0].transactionId,
+    transactionStatus:
+      matches[0].transactionStatus,
+  };
+}
+
+
