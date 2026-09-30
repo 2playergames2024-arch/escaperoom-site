@@ -324,12 +324,12 @@ function BookingDetailsPageContent() {
 
   return (
     <main className="min-h-screen bg-white text-slate-950">
-      <section className="mx-auto max-w-6xl px-6 py-12">
+      <section className="mx-auto max-w-6xl px-6 py-12 lg:py-5">
         <Link
           href={`${locationData.bookHref}?date=${encodeURIComponent(
             date
           )}`}
-          className="mb-8 inline-block text-sm font-black uppercase text-orange-500 focus:outline-none focus:ring-4 focus:ring-orange-300"
+          className="mb-8 inline-block text-sm font-black uppercase text-orange-500 focus:outline-none focus:ring-4 focus:ring-orange-300 lg:mb-3"
         >
           ← Back to Rooms & Times
         </Link>
@@ -340,8 +340,8 @@ function BookingDetailsPageContent() {
               Booking Details
             </h1>
 
-            <div className="mt-8 overflow-hidden rounded-[18px] border-2 border-slate-950">
-              <div className="relative h-64 bg-slate-900">
+            <div className="mt-8 overflow-hidden rounded-[18px] border-2 border-slate-950 lg:mt-4">
+              <div className="relative h-64 bg-slate-900 lg:h-52">
                 <Image
                   src={roomInfo.image}
                   alt={roomInfo.name}
@@ -356,7 +356,7 @@ function BookingDetailsPageContent() {
                 <div className="absolute inset-0 bg-black/25" />
               </div>
 
-              <div className="p-6">
+              <div className="p-6 lg:p-4">
                 <p className="text-sm font-black uppercase tracking-[0.2em] text-orange-500">
                   Selected Room
                 </p>
@@ -365,13 +365,13 @@ function BookingDetailsPageContent() {
                   {roomInfo.name}
                 </h2>
 
-                <p className="mt-1 text-lg font-bold text-slate-700">
+                <p className="mt-1 text-lg font-bold text-slate-700 lg:text-[22px] lg:leading-tight">
                   {location === "cherry-hill"
                     ? "Cherry Hill, New Jersey"
                     : "King of Prussia, PA"}
                 </p>
 
-                <div className="mt-5 grid gap-3 text-lg font-bold">
+                <div className="mt-5 grid gap-3 text-lg font-bold lg:mt-3 lg:gap-1.5">
                   <p>
                     Date: {formattedDate}
                   </p>
@@ -395,18 +395,18 @@ function BookingDetailsPageContent() {
               </div>
             </div>
 
-            <div className="mt-8 rounded-[18px] border-2 border-slate-950">
-              <div className="border-b-2 border-slate-950 p-4 text-center">
+            <div className="mt-8 rounded-[18px] border-2 border-slate-950 lg:mt-4">
+              <div className="border-b-2 border-slate-950 p-4 text-center lg:py-2.5">
                 <div className="text-xl font-black">
                   How many players?
                 </div>
 
-                <p className="mt-2 text-sm font-bold text-slate-600">
+                <p className="mt-2 text-sm font-bold text-slate-600 lg:mt-1">
                   {minimumPlayerText}
                 </p>
               </div>
 
-              <div className="flex items-center justify-center gap-10 p-6">
+              <div className="flex items-center justify-center gap-10 p-6 lg:py-3">
                 <button
                   type="button"
                   aria-label="Remove player"
@@ -453,16 +453,16 @@ function BookingDetailsPageContent() {
             </div>
           </section>
 
-          <aside className="h-fit rounded-[18px] border-2 border-slate-950 p-6 shadow-lg">
+          <aside className="h-fit rounded-[18px] border-2 border-slate-950 p-6 shadow-lg lg:p-4">
             <h2 className="text-2xl font-black">
               Contact Information
             </h2>
 
-            <div className="mt-6 grid gap-4">
+            <div className="mt-6 grid gap-4 lg:mt-4 lg:gap-3">
               <div>
                 <label
                   htmlFor="fullName"
-                  className="mb-2 block font-bold"
+                  className="mb-2 block font-bold lg:mb-1"
                 >
                   Full Name
                 </label>
@@ -478,14 +478,14 @@ function BookingDetailsPageContent() {
                   }
                   autoComplete="name"
                   maxLength={200}
-                  className="w-full rounded border-2 border-slate-300 p-4 font-bold focus:outline-none focus:ring-4 focus:ring-orange-300"
+                  className="w-full rounded border-2 border-slate-300 p-4 font-bold focus:outline-none focus:ring-4 focus:ring-orange-300 lg:py-2.5"
                 />
               </div>
 
               <div>
                 <label
                   htmlFor="email"
-                  className="mb-2 block font-bold"
+                  className="mb-2 block font-bold lg:mb-1"
                 >
                   Email
                 </label>
@@ -502,14 +502,14 @@ function BookingDetailsPageContent() {
                   type="email"
                   autoComplete="email"
                   maxLength={254}
-                  className="w-full rounded border-2 border-slate-300 p-4 font-bold focus:outline-none focus:ring-4 focus:ring-orange-300"
+                  className="w-full rounded border-2 border-slate-300 p-4 font-bold focus:outline-none focus:ring-4 focus:ring-orange-300 lg:py-2.5"
                 />
               </div>
 
               <div>
                 <label
                   htmlFor="phone"
-                  className="mb-2 block font-bold"
+                  className="mb-2 block font-bold lg:mb-1"
                 >
                   Phone Number
                 </label>
@@ -526,14 +526,14 @@ function BookingDetailsPageContent() {
                   type="tel"
                   autoComplete="tel"
                   maxLength={40}
-                  className="w-full rounded border-2 border-slate-300 p-4 font-bold focus:outline-none focus:ring-4 focus:ring-orange-300"
+                  className="w-full rounded border-2 border-slate-300 p-4 font-bold focus:outline-none focus:ring-4 focus:ring-orange-300 lg:py-2.5"
                 />
               </div>
 
               <div>
                 <label
                   htmlFor="promoCode"
-                  className="mb-2 block font-bold"
+                  className="mb-2 block font-bold lg:mb-1"
                 >
                   Gift Voucher or Promo Code
                   <span className="ml-1 font-normal text-slate-500">
@@ -551,7 +551,7 @@ function BookingDetailsPageContent() {
                     )
                   }
                   maxLength={100}
-                  className="w-full rounded border-2 border-slate-300 p-4 font-bold focus:outline-none focus:ring-4 focus:ring-orange-300"
+                  className="w-full rounded border-2 border-slate-300 p-4 font-bold focus:outline-none focus:ring-4 focus:ring-orange-300 lg:py-2.5"
                 />
               </div>
 
@@ -611,7 +611,7 @@ function BookingDetailsPageContent() {
                 </p>
               )}
 
-              <div className="mt-6 border-t-2 border-slate-200 pt-5">
+              <div className="mt-6 border-t-2 border-slate-200 pt-5 lg:mt-3 lg:pt-3">
                 <p className="text-sm font-black uppercase text-slate-500">
                   Final total calculated on next step
                 </p>
@@ -621,7 +621,7 @@ function BookingDetailsPageContent() {
                 type="button"
                 onClick={handleContinue}
                 disabled={isSubmitting}
-                className="mt-4 rounded bg-orange-500 px-8 py-4 font-black uppercase text-white hover:bg-orange-600 focus:outline-none focus:ring-4 focus:ring-orange-300 disabled:cursor-not-allowed disabled:bg-slate-400"
+                className="mt-4 rounded bg-orange-500 px-8 py-4 font-black uppercase text-white hover:bg-orange-600 focus:outline-none focus:ring-4 focus:ring-orange-300 disabled:cursor-not-allowed disabled:bg-slate-400 lg:mt-3 lg:py-3"
               >
                 {isSubmitting
                   ? "Securing Booking..."
