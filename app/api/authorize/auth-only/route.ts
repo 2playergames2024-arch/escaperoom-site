@@ -40,6 +40,9 @@ import {
   isBookingWatchdogTakeoverRequested,
   releasePaymentRouteOwnership,
 } from "@/app/lib/bookingWatchdog";
+import {
+  rememberBookingNotificationSource,
+} from "@/app/lib/bookingNotifications";
 
 const redis = Redis.fromEnv();
 
@@ -750,6 +753,15 @@ export async function POST(
         }
       );
     }
+
+    /*
+     * Preserve a short-lived copy of the booking details
+     * for after-the-fact SMS. This helper is fail-open:
+     * notification bookkeeping can never block checkout.
+     */
+    await rememberBookingNotificationSource(
+      session
+    );
 
     /*
      * Own this checkout while the synchronous payment

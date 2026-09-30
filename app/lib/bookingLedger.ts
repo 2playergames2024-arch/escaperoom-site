@@ -1,7 +1,42 @@
 import "server-only";
+import { after } from "next/server";
 import { neon } from "@neondatabase/serverless";
 import { BOOKING_STATES } from "./bookingState";
 import { logBookingEvent } from "./bookingLog";
+import { triggerCompletedBookingNotifications } from "./bookingNotifications";
+
+function scheduleCompletedBookingNotifications({
+  checkoutId,
+  holdId,
+}: {
+  checkoutId: string;
+  holdId?: string | null;
+}) {
+  try {
+    after(async () => {
+      await triggerCompletedBookingNotifications({
+        checkoutId,
+        holdId,
+      });
+    });
+  } catch (error) {
+    /*
+     * Notification scheduling is strictly non-critical.
+     * A missing request context or any scheduling error
+     * must never alter the completed booking.
+     */
+    console.error(
+      "Could not schedule completed booking notifications.",
+      {
+        checkoutId,
+        reason:
+          error instanceof Error
+            ? error.message
+            : "unknown",
+      }
+    );
+  }
+}
 
 function getSql() {
   const databaseUrl = process.env.DATABASE_URL;
@@ -189,6 +224,21 @@ export async function updateBookingLedgerRecord({
       : "warn"
   );
 
+  if (
+    before?.status !==
+      BOOKING_STATES.COMPLETE &&
+    updated?.status ===
+      BOOKING_STATES.COMPLETE
+  ) {
+    scheduleCompletedBookingNotifications({
+      checkoutId,
+      holdId:
+        updated.hold_id ??
+        holdId ??
+        null,
+    });
+  }
+
   return updated;
 }
 export async function claimCheckoutForAuthorization(
@@ -281,6 +331,19 @@ export async function markBookingCaptureComplete(
       ? "info"
       : "warn"
   );
+
+  if (
+    before?.status !==
+      BOOKING_STATES.COMPLETE &&
+    completed?.status ===
+      BOOKING_STATES.COMPLETE
+  ) {
+    scheduleCompletedBookingNotifications({
+      checkoutId,
+      holdId:
+        completed.hold_id ?? null,
+    });
+  }
 
   return completed;
 }

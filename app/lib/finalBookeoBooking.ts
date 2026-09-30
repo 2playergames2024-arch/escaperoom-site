@@ -158,13 +158,13 @@ export async function createFinalBookeoBooking(
 
               promotionCodeInput:
                 session.codeType ===
-                "promotion"
+                  "promotion"
                   ? session.promoCode
                   : undefined,
 
               giftVoucherCodeInput:
                 session.codeType ===
-                "giftVoucher"
+                  "giftVoucher"
                   ? session.promoCode
                   : undefined,
 
@@ -203,15 +203,15 @@ export async function createFinalBookeoBooking(
                  */
                 customFields:
                   session.location ===
-                  LOCATIONS.cherryHill.slug
+                    LOCATIONS.cherryHill.slug
                     ? [
                       {
-                        id: "JR9H9",
+                        id: "JRF9H9",
                         value:
                           session.elevatorAssistanceRequired ===
-                          true
-                            ? "Yes"
-                            : "No",
+                            true
+                            ? "JRF9H9_XPWREWXE"
+                            : "JRF9H9_XTXENWHH",
                       },
                     ]
                     : undefined,
@@ -230,7 +230,7 @@ export async function createFinalBookeoBooking(
         }
       );
 
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let data: any = null;
 
     try {
