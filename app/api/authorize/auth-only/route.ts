@@ -349,6 +349,304 @@ async function captureBookedCheckout({
   );
 }
 
+
+async function completeZeroDollarCheckout(
+  session: BookingSession
+) {
+  const completeBooking = async (
+    bookeoBookingId: string,
+    responseData: Record<string, unknown> = {}
+  ) => {
+    await updateBookingLedgerRecord({
+      checkoutId:
+        session.checkoutId,
+      bookeoBookingId,
+      status:
+        BOOKING_STATES.BOOKED,
+      errorCode: null,
+      errorMessage: null,
+    });
+
+    await updateBookingLedgerRecord({
+      checkoutId:
+        session.checkoutId,
+      status:
+        BOOKING_STATES.COMPLETE,
+      errorCode: null,
+      errorMessage: null,
+      errorData: {},
+    });
+
+    return NextResponse.json({
+      ...responseData,
+      zeroPayment: true,
+      authorized: false,
+      booked: true,
+      captured: false,
+      complete: true,
+      bookeoBookingId,
+    });
+  };
+
+  const firstCreate =
+    await createFinalBookeoBooking(
+      session,
+      null
+    );
+
+  if (firstCreate.ok) {
+    return completeBooking(
+      firstCreate.bookingId
+    );
+  }
+
+  /*
+   * A failed/uncertain CREATE may still have reached
+   * Bookeo. Never immediately send another CREATE.
+   * First verify by our unique checkout externalRef.
+   */
+  for (
+    let lookupAttempt = 1;
+    lookupAttempt <= 3;
+    lookupAttempt++
+  ) {
+    if (lookupAttempt > 1) {
+      await new Promise(
+        (resolve) =>
+          setTimeout(
+            resolve,
+            lookupAttempt === 2
+              ? 1000
+              : 2000
+          )
+      );
+    }
+
+    const lookupResult =
+      await lookupFinalBookeoBooking(
+        session
+      );
+
+    if (
+      lookupResult.ok &&
+      lookupResult.result ===
+        "FOUND"
+    ) {
+      return completeBooking(
+        lookupResult.bookingId,
+        {
+          recoveredByLookup:
+            true,
+        }
+      );
+    }
+
+    if (
+      lookupResult.ok &&
+      lookupResult.result ===
+        "AMBIGUOUS"
+    ) {
+      await updateBookingLedgerRecord({
+        checkoutId:
+          session.checkoutId,
+        errorCode:
+          "ZERO_DOLLAR_LOOKUP_MULTIPLE_MATCHES",
+        errorMessage:
+          "Multiple Bookeo bookings matched the zero-dollar checkout.",
+        errorData: {
+          matches:
+            lookupResult.matches,
+        },
+      });
+
+      return NextResponse.json(
+        {
+          zeroPayment: true,
+          uncertain: true,
+          error:
+            "The booking needs verification before another attempt.",
+        },
+        {
+          status: 409,
+        }
+      );
+    }
+
+    if (!lookupResult.ok) {
+      await updateBookingLedgerRecord({
+        checkoutId:
+          session.checkoutId,
+        errorCode:
+          "ZERO_DOLLAR_LOOKUP_FAILED",
+        errorMessage:
+          lookupResult.message,
+      });
+
+      return NextResponse.json(
+        {
+          zeroPayment: true,
+          uncertain: true,
+          error:
+            "Bookeo booking verification could not be completed.",
+        },
+        {
+          status: 502,
+        }
+      );
+    }
+  }
+
+  /*
+   * Three successful lookups found no booking.
+   * Re-validate/recreate the hold, then allow exactly
+   * one controlled second CREATE.
+   */
+  const retryHoldResult =
+    await ensurePreAuthHold(
+      session
+    );
+
+  if (!retryHoldResult.ok) {
+    await updateBookingLedgerRecord({
+      checkoutId:
+        session.checkoutId,
+      status:
+        BOOKING_STATES.FAILED,
+      errorCode:
+        retryHoldResult.reason ===
+        "UNAVAILABLE"
+          ? "ZERO_DOLLAR_HOLD_UNAVAILABLE"
+          : "ZERO_DOLLAR_HOLD_CHECK_FAILED",
+      errorMessage:
+        retryHoldResult.reason ===
+        "UNAVAILABLE"
+          ? "The Bookeo hold became unavailable."
+          : "Bookeo could not verify the hold before zero-dollar recovery.",
+    });
+
+    return NextResponse.json(
+      {
+        zeroPayment: true,
+        unavailable:
+          retryHoldResult.reason ===
+          "UNAVAILABLE",
+        error:
+          retryHoldResult.reason ===
+          "UNAVAILABLE"
+            ? "Sorry, those seats are no longer available."
+            : "Bookeo could not safely verify the booking hold.",
+      },
+      {
+        status:
+          retryHoldResult.reason ===
+          "UNAVAILABLE"
+            ? 409
+            : 502,
+      }
+    );
+  }
+
+  session =
+    retryHoldResult.session;
+
+  const secondCreate =
+    await createFinalBookeoBooking(
+      session,
+      null
+    );
+
+  if (secondCreate.ok) {
+    return completeBooking(
+      secondCreate.bookingId,
+      {
+        recoveredBySecondCreate:
+          true,
+      }
+    );
+  }
+
+  const finalLookup =
+    await lookupFinalBookeoBooking(
+      session
+    );
+
+  if (
+    finalLookup.ok &&
+    finalLookup.result ===
+      "FOUND"
+  ) {
+    return completeBooking(
+      finalLookup.bookingId,
+      {
+        recoveredByFinalLookup:
+          true,
+      }
+    );
+  }
+
+  if (
+    finalLookup.ok &&
+    finalLookup.result ===
+      "NO_MATCH"
+  ) {
+    await updateBookingLedgerRecord({
+      checkoutId:
+        session.checkoutId,
+      status:
+        BOOKING_STATES.FAILED,
+      errorCode:
+        "ZERO_DOLLAR_FINAL_NO_MATCH",
+      errorMessage:
+        "Two Bookeo CREATE attempts completed without a confirmed booking.",
+    });
+
+    return NextResponse.json(
+      {
+        zeroPayment: true,
+        error:
+          "The booking could not be confirmed. Please start again.",
+      },
+      {
+        status: 502,
+      }
+    );
+  }
+
+  await updateBookingLedgerRecord({
+    checkoutId:
+      session.checkoutId,
+    errorCode:
+      finalLookup.ok
+        ? "ZERO_DOLLAR_FINAL_LOOKUP_AMBIGUOUS"
+        : "ZERO_DOLLAR_FINAL_LOOKUP_FAILED",
+    errorMessage:
+      finalLookup.ok
+        ? "Multiple Bookeo bookings matched the zero-dollar checkout."
+        : finalLookup.message,
+    errorData:
+      finalLookup.ok &&
+      finalLookup.result ===
+        "AMBIGUOUS"
+        ? {
+          matches:
+            finalLookup.matches,
+        }
+        : {},
+  });
+
+  return NextResponse.json(
+    {
+      zeroPayment: true,
+      uncertain: true,
+      error:
+        "The booking needs verification before another attempt.",
+    },
+    {
+      status: 502,
+    }
+  );
+}
+
 type OpaqueData = {
   dataDescriptor: string;
   dataValue: string;
@@ -418,23 +716,6 @@ export async function POST(
         {
           error:
             "The booking session is invalid or expired.",
-        },
-        {
-          status: 400,
-        }
-      );
-    }
-
-    if (
-      !opaqueData ||
-      opaqueData.dataDescriptor !==
-      "COMMON.ACCEPT.INAPP.PAYMENT" ||
-      !opaqueData.dataValue
-    ) {
-      return NextResponse.json(
-        {
-          error:
-            "The secure payment token is invalid.",
         },
         {
           status: 400,
@@ -589,7 +870,7 @@ export async function POST(
 
     if (
       !Number.isFinite(amount) ||
-      amount <= 0
+      amount < 0
     ) {
       await updateBookingLedgerRecord({
         checkoutId:
@@ -609,6 +890,35 @@ export async function POST(
         },
         {
           status: 500,
+        }
+      );
+    }
+
+    /*
+     * A promotion or gift voucher can legitimately
+     * reduce the Bookeo totalPayable to exactly $0.
+     * In that case there is no card transaction:
+     * finalize Bookeo directly and skip Authorize.Net.
+     */
+    if (amount === 0) {
+      return completeZeroDollarCheckout(
+        session
+      );
+    }
+
+    if (
+      !opaqueData ||
+      opaqueData.dataDescriptor !==
+      "COMMON.ACCEPT.INAPP.PAYMENT" ||
+      !opaqueData.dataValue
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "The secure payment token is invalid.",
+        },
+        {
+          status: 400,
         }
       );
     }

@@ -344,50 +344,111 @@ export async function POST(
       );
     }
 
-    const response =
-      await fetch(
-        "https://api.bookeo.com/v2/holds",
-        {
-          method: "POST",
-          cache: "no-store",
-          signal:
-            AbortSignal.timeout(
-              BOOKEO_HOLD_TIMEOUT_MS
-            ),
-          headers: {
-            "Content-Type":
-              "application/json",
-            "X-Bookeo-apiKey":
-              BOOKEO_API_KEY,
-            "X-Bookeo-secretKey":
-              BOOKEO_SECRET_KEY,
-          },
-          body:
-            JSON.stringify({
-              eventId,
-              productId:
-                room.productId,
-
-              participants: {
-                numbers: [
-                  {
-                    peopleCategoryId:
-                      BOOKEO_PEOPLE_CATEGORY_ID,
-                    number:
-                      players,
-                  },
-                ],
-              },
-
-              promotionCodeInput:
-                promoCode ||
-                undefined,
-            }),
-        }
+    const createBookeoHold = async (
+      codeType?:
+        | "promotion"
+        | "giftVoucher",
+      previousHoldId?: string
+    ) => {
+      const url = new URL(
+        "https://api.bookeo.com/v2/holds"
       );
 
-    const data =
+      if (previousHoldId) {
+        url.searchParams.set(
+          "previousHoldId",
+          previousHoldId
+        );
+      }
+
+      return fetch(url, {
+        method: "POST",
+        cache: "no-store",
+        signal:
+          AbortSignal.timeout(
+            BOOKEO_HOLD_TIMEOUT_MS
+          ),
+        headers: {
+          "Content-Type":
+            "application/json",
+          "X-Bookeo-apiKey":
+            BOOKEO_API_KEY,
+          "X-Bookeo-secretKey":
+            BOOKEO_SECRET_KEY,
+        },
+        body: JSON.stringify({
+          eventId,
+          productId:
+            room.productId,
+
+          participants: {
+            numbers: [
+              {
+                peopleCategoryId:
+                  BOOKEO_PEOPLE_CATEGORY_ID,
+                number:
+                  players,
+              },
+            ],
+          },
+
+          promotionCodeInput:
+            codeType ===
+            "promotion"
+              ? promoCode
+              : undefined,
+
+          giftVoucherCodeInput:
+            codeType ===
+            "giftVoucher"
+              ? promoCode
+              : undefined,
+        }),
+      });
+    };
+
+    let appliedCodeType:
+      | ""
+      | "promotion"
+      | "giftVoucher" =
+      promoCode
+        ? "promotion"
+        : "";
+
+    let response =
+      await createBookeoHold(
+        promoCode
+          ? "promotion"
+          : undefined
+      );
+
+    let data =
       await response.json();
+
+    if (
+      promoCode &&
+      (!response.ok ||
+        data.promotionApplicable !==
+          true)
+    ) {
+      const previousHoldId =
+        response.ok
+          ? String(data.id || "")
+          : "";
+
+      response =
+        await createBookeoHold(
+          "giftVoucher",
+          previousHoldId ||
+            undefined
+        );
+
+      data =
+        await response.json();
+
+      appliedCodeType =
+        "giftVoucher";
+    }
 
     if (!response.ok) {
       const serialized =
@@ -493,6 +554,13 @@ export async function POST(
           ?.amount ?? 0
       );
 
+    const giftVoucherCredit =
+      Number(
+        data
+          .applicableGiftVoucherCredit
+          ?.amount ?? 0
+      );
+
     const tax =
       Number(
         data.price
@@ -518,13 +586,18 @@ export async function POST(
       promotionDiscount <
       0 ||
       !Number.isFinite(
+        giftVoucherCredit
+      ) ||
+      giftVoucherCredit <
+      0 ||
+      !Number.isFinite(
         tax
       ) ||
       tax < 0 ||
       !Number.isFinite(
         trustedTotal
       ) ||
-      trustedTotal <= 0
+      trustedTotal < 0
     ) {
       console.error(
         "Bookeo hold returned an invalid price breakdown.",
@@ -553,6 +626,8 @@ export async function POST(
         holdId,
         checkoutId,
         promoCode,
+        codeType:
+          appliedCodeType,
 
         location:
           locationConfig.slug,
@@ -586,6 +661,11 @@ export async function POST(
 
         promotionDiscount:
           promotionDiscount.toFixed(
+            2
+          ),
+
+        giftVoucherCredit:
+          giftVoucherCredit.toFixed(
             2
           ),
 

@@ -53,7 +53,7 @@ function getBookeoApiKey(
 
 export async function createFinalBookeoBooking(
   session: BookingSession,
-  authorizeTransactionId: string
+  authorizeTransactionId: string | null
 ): Promise<FinalBookeoBookingResult> {
 
   const BOOKEO_API_KEY =
@@ -156,6 +156,18 @@ export async function createFinalBookeoBooking(
                 ],
               },
 
+              promotionCodeInput:
+                session.codeType ===
+                "promotion"
+                  ? session.promoCode
+                  : undefined,
+
+              giftVoucherCodeInput:
+                session.codeType ===
+                "giftVoucher"
+                  ? session.promoCode
+                  : undefined,
+
               customer: {
                 firstName:
                   session.firstName ||
@@ -183,12 +195,15 @@ export async function createFinalBookeoBooking(
                     : [],
               },
 
-              notes: [
-                {
-                  text:
-                    `Authorize.Net authorization ${authorizeTransactionId}`,
-                },
-              ],
+              notes:
+                authorizeTransactionId
+                  ? [
+                    {
+                      text:
+                        `Authorize.Net authorization ${authorizeTransactionId}`,
+                    },
+                  ]
+                  : [],
             }),
         }
       );

@@ -240,12 +240,47 @@ export async function ensurePreAuthHold(
    * The same slot is available.
    * Create a fresh hold.
    *
-   * Do not send the expired hold as
+   * The customer uses one field for either
+   * a promotion code or a gift voucher.
+   * Try the entered code as a promotion first.
+   * If Bookeo does not apply it as a promotion,
+   * retry the same code as a gift voucher.
+   *
+   * Do not send the expired original hold as
    * previousHoldId.
    */
-  const replacementResponse =
-    await fetch(
-      "https://api.bookeo.com/v2/holds?holdDurationSeconds=600",
+  const persistedCodeType =
+    session.codeType ===
+      "promotion" ||
+    session.codeType ===
+      "giftVoucher"
+      ? session.codeType
+      : undefined;
+
+  const createReplacementHold = async (
+    codeType?:
+      | "promotion"
+      | "giftVoucher",
+    previousHoldId?: string
+  ) => {
+    const url = new URL(
+      "https://api.bookeo.com/v2/holds"
+    );
+
+    url.searchParams.set(
+      "holdDurationSeconds",
+      "600"
+    );
+
+    if (previousHoldId) {
+      url.searchParams.set(
+        "previousHoldId",
+        previousHoldId
+      );
+    }
+
+    return fetch(
+      url,
       {
         method: "POST",
         cache: "no-store",
@@ -275,11 +310,82 @@ export async function ensurePreAuthHold(
             },
 
             promotionCodeInput:
-              session.promoCode ||
-              undefined,
+              codeType ===
+              "promotion"
+                ? session.promoCode
+                : undefined,
+
+            giftVoucherCodeInput:
+              codeType ===
+              "giftVoucher"
+                ? session.promoCode
+                : undefined,
           }),
       }
     );
+  };
+
+  let appliedCodeType:
+    | ""
+    | "promotion"
+    | "giftVoucher" =
+    persistedCodeType ||
+    (
+      session.promoCode
+        ? "promotion"
+        : ""
+    );
+
+  let replacementResponse =
+    await createReplacementHold(
+      persistedCodeType ||
+      (
+        session.promoCode
+          ? "promotion"
+          : undefined
+      )
+    );
+
+  let replacementData =
+    await replacementResponse.json();
+
+  /*
+   * New sessions remember which kind of code Bookeo
+   * accepted. For an older in-flight session created
+   * before this field existed, keep the one-time
+   * promotion -> gift-voucher fallback.
+   */
+  if (
+    session.promoCode &&
+    !persistedCodeType &&
+    (
+      !replacementResponse.ok ||
+      replacementData
+        ?.promotionApplicable !==
+        true
+    )
+  ) {
+    const promotionAttemptHoldId =
+      replacementResponse.ok
+        ? String(
+            replacementData?.id ||
+            ""
+          )
+        : "";
+
+    replacementResponse =
+      await createReplacementHold(
+        "giftVoucher",
+        promotionAttemptHoldId ||
+          undefined
+      );
+
+    replacementData =
+      await replacementResponse.json();
+
+    appliedCodeType =
+      "giftVoucher";
+  }
 
   if (
     !replacementResponse.ok
@@ -300,9 +406,6 @@ export async function ensurePreAuthHold(
           429,
     };
   }
-
-  const replacementData =
-    await replacementResponse.json();
 
   const newHoldId =
     String(
@@ -328,6 +431,13 @@ export async function ensurePreAuthHold(
         ?.amount ?? 0
     );
 
+  const giftVoucherCredit =
+    Number(
+      replacementData
+        .applicableGiftVoucherCredit
+        ?.amount ?? 0
+    );
+
   const tax =
     Number(
       replacementData.price
@@ -349,9 +459,13 @@ export async function ensurePreAuthHold(
     !Number.isFinite(
       promotionDiscount
     ) ||
+    !Number.isFinite(
+      giftVoucherCredit
+    ) ||
+    giftVoucherCredit < 0 ||
     !Number.isFinite(tax) ||
     !Number.isFinite(total) ||
-    total <= 0
+    total < 0
   ) {
     return {
       ok: false,
@@ -371,11 +485,19 @@ export async function ensurePreAuthHold(
       holdExpiration:
         newHoldExpiration,
 
+      codeType:
+        appliedCodeType,
+
       roomCharge:
         roomCharge.toFixed(2),
 
       promotionDiscount:
         promotionDiscount.toFixed(
+          2
+        ),
+
+      giftVoucherCredit:
+        giftVoucherCredit.toFixed(
           2
         ),
 
@@ -396,6 +518,9 @@ export async function ensurePreAuthHold(
 
       promoCode:
         session.promoCode,
+
+      codeType:
+        appliedCodeType,
 
       productId:
         session.productId,
@@ -430,6 +555,10 @@ export async function ensurePreAuthHold(
       promotionDiscount:
         updatedSession
           .promotionDiscount,
+
+      giftVoucherCredit:
+        updatedSession
+          .giftVoucherCredit,
 
       tax:
         updatedSession.tax,

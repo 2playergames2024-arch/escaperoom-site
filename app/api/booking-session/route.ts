@@ -234,6 +234,9 @@ export async function POST(req: Request) {
       promoCode:
         trustedHold.promoCode,
 
+      codeType:
+        trustedHold.codeType,
+
       productId:
         trustedHold.productId,
 
@@ -266,6 +269,9 @@ export async function POST(req: Request) {
 
       promotionDiscount:
         trustedHold.promotionDiscount,
+
+      giftVoucherCredit:
+        trustedHold.giftVoucherCredit,
 
       tax:
         trustedHold.tax,
@@ -543,6 +549,9 @@ export async function GET(req: Request) {
 
         promotionDiscount:
           session.promotionDiscount,
+
+        giftVoucherCredit:
+          session.giftVoucherCredit,
 
         tax:
           session.tax,

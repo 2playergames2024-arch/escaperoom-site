@@ -410,6 +410,129 @@ function PaymentPageContent() {
       false;
 
     try {
+      const amountDue =
+        Number(session.total);
+
+      if (
+        Number.isFinite(amountDue) &&
+        amountDue === 0
+      ) {
+        authorizationStarted = true;
+        setPaymentLocked(true);
+
+        startProcessingTimers();
+
+        const completionResponse =
+          await fetch(
+            "/api/authorize/auth-only",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type":
+                  "application/json",
+              },
+              body: JSON.stringify({
+                sessionId,
+              }),
+            }
+          );
+
+        const completionData =
+          await completionResponse.json();
+
+        if (
+          paymentResolvedRef.current
+        ) {
+          return;
+        }
+
+        if (
+          completionResponse.ok &&
+          completionData.zeroPayment &&
+          completionData.booked &&
+          completionData.complete &&
+          completionData.bookeoBookingId
+        ) {
+          paymentResolvedRef.current =
+            true;
+
+          clearProcessingTimers();
+
+          trackClarityEvent(
+            "booking_completed"
+          );
+
+          setConfirmation({
+            bookeoBookingId:
+              String(
+                completionData
+                  .bookeoBookingId
+              ),
+          });
+
+          return;
+        }
+
+        if (
+          completionData.unavailable
+        ) {
+          paymentResolvedRef.current =
+            true;
+
+          clearProcessingTimers();
+
+          setPaymentNotice({
+            title:
+              "That Time Is No Longer Available",
+            message:
+              completionData.error ||
+              "Unfortunately, those seats became unavailable before your booking could be completed.",
+            instruction:
+              "Close this message, then use Change Room, Date, or Time below to start again.",
+          });
+
+          return;
+        }
+
+        if (
+          completionData.uncertain
+        ) {
+          paymentResolvedRef.current =
+            true;
+
+          clearProcessingTimers();
+
+          setPaymentNotice({
+            title:
+              "Booking Is Being Verified",
+            message:
+              completionData.error ||
+              "We could not immediately verify the final Bookeo booking.",
+            instruction:
+              "Please contact us before submitting another booking for the same time.",
+          });
+
+          return;
+        }
+
+        paymentResolvedRef.current =
+          true;
+
+        clearProcessingTimers();
+
+        setPaymentNotice({
+          title:
+            "Booking Could Not Be Completed",
+          message:
+            completionData.error ||
+            "We could not complete your booking.",
+          instruction:
+            "Close this message, then use Change Room, Date, or Time below to start again.",
+        });
+
+        return;
+      }
+
       const authorizeEnvironment =
         process.env
           .NEXT_PUBLIC_AUTHORIZE_ENVIRONMENT ===
@@ -738,6 +861,11 @@ function PaymentPageContent() {
   const promotionDiscount =
     Number(session.promotionDiscount);
 
+  const giftVoucherCredit =
+    Number(
+      session.giftVoucherCredit
+    );
+
   const tax =
     Number(session.tax);
 
@@ -918,12 +1046,27 @@ function PaymentPageContent() {
               {promotionDiscount > 0 && (
                 <div className="mt-1 flex justify-between">
                   <span>
-                    Promotion/Voucher
+                    Promotion
                   </span>
 
                   <span>
                     -$
                     {promotionDiscount.toFixed(
+                      2
+                    )}
+                  </span>
+                </div>
+              )}
+
+              {giftVoucherCredit > 0 && (
+                <div className="mt-1 flex justify-between">
+                  <span>
+                    Gift Voucher
+                  </span>
+
+                  <span>
+                    -$
+                    {giftVoucherCredit.toFixed(
                       2
                     )}
                   </span>
@@ -964,8 +1107,9 @@ function PaymentPageContent() {
             </p>
           </div>
 
-          <div className="mt-4 grid gap-3">
-            <div>
+          {finalTotal > 0 && (
+            <div className="mt-4 grid gap-3">
+              <div>
               <label
                 htmlFor="cardNumber"
                 className="mb-1 block font-black"
@@ -1058,25 +1202,32 @@ function PaymentPageContent() {
                 />
               </div>
             </div>
-          </div>
+            </div>
+          )}
+
 
           <button
             type="button"
             onClick={handlePayNow}
             disabled={
               isPaying ||
-              !acceptReady ||
-              paymentLocked
+              paymentLocked ||
+              (
+                finalTotal > 0 &&
+                !acceptReady
+              )
             }
             className="mt-4 w-full rounded bg-orange-500 px-8 py-3.5 font-black uppercase text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-slate-400"
           >
             {isPaying
               ? "Confirming Booking..."
-              : !acceptReady
-                ? "Loading Secure Payment..."
-                : paymentLocked
-                  ? "Payment Attempt Complete"
-                  : `Pay $${finalTotal.toFixed(2)} & Complete Booking`}
+              : paymentLocked
+                ? "Booking Attempt Complete"
+                : finalTotal === 0
+                  ? "Complete Booking"
+                  : !acceptReady
+                    ? "Loading Secure Payment..."
+                    : `Pay $${finalTotal.toFixed(2)} & Complete Booking`}
           </button>
 
           <Link

@@ -1,7 +1,13 @@
+export type BookingCodeType =
+  | ""
+  | "promotion"
+  | "giftVoucher";
+
 export type TrustedBookeoHold = {
   holdId: string;
   checkoutId: string;
   promoCode: string;
+  codeType: BookingCodeType;
   productId: string;
   eventId: string;
   players: string;
@@ -13,6 +19,7 @@ export type TrustedBookeoHold = {
   time: string;
   roomCharge: string;
   promotionDiscount: string;
+  giftVoucherCredit: string;
   tax: string;
   total: string;
   holdExpiration: string;
@@ -24,6 +31,7 @@ export type BookingSession = {
   holdId: string;
   checkoutId: string;
   promoCode: string;
+  codeType: BookingCodeType;
   productId: string;
   eventId: string;
   players: string;
@@ -35,6 +43,7 @@ export type BookingSession = {
   time: string;
   roomCharge: string;
   promotionDiscount: string;
+  giftVoucherCredit: string;
   tax: string;
   total: string;
   holdExpiration: string;
@@ -55,6 +64,7 @@ export type PaymentSession = {
   players: string;
   roomCharge: string;
   promotionDiscount: string;
+  giftVoucherCredit: string;
   tax: string;
   total: string;
   customerName: string;
