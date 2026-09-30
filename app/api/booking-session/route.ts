@@ -115,6 +115,10 @@ export async function POST(req: Request) {
         40
       );
 
+    const requestedElevatorAssistance =
+      body.elevatorAssistanceRequired ===
+      true;
+
     if (!holdId) {
       return NextResponse.json(
         {
@@ -286,6 +290,16 @@ export async function POST(req: Request) {
       lastName,
       email,
       phone,
+
+      /*
+       * Elevator Access is a Cherry Hill customer
+       * custom field. Never accept it for another
+       * location, even if a client submits the flag.
+       */
+      elevatorAssistanceRequired:
+        trustedHold.location ===
+          "cherry-hill" &&
+        requestedElevatorAssistance,
 
       createdAt:
         Date.now(),

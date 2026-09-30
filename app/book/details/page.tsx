@@ -91,6 +91,11 @@ function BookingDetailsPageContent() {
   const [promoCode, setPromoCode] =
     useState("");
 
+  const [
+    elevatorAssistanceRequired,
+    setElevatorAssistanceRequired,
+  ] = useState(false);
+
   const [error, setError] =
     useState("");
 
@@ -243,6 +248,9 @@ function BookingDetailsPageContent() {
             lastName,
             email: email.trim(),
             phone: phone.trim(),
+            elevatorAssistanceRequired:
+              location === "cherry-hill" &&
+              elevatorAssistanceRequired,
           }),
         }
       );
@@ -357,7 +365,13 @@ function BookingDetailsPageContent() {
                   {roomInfo.name}
                 </h2>
 
-                <div className="mt-6 grid gap-3 text-lg font-bold">
+                <p className="mt-1 text-lg font-bold text-slate-700">
+                  {location === "cherry-hill"
+                    ? "Cherry Hill, New Jersey"
+                    : "King of Prussia, PA"}
+                </p>
+
+                <div className="mt-5 grid gap-3 text-lg font-bold">
                   <p>
                     Date: {formattedDate}
                   </p>
@@ -540,6 +554,52 @@ function BookingDetailsPageContent() {
                   className="w-full rounded border-2 border-slate-300 p-4 font-bold focus:outline-none focus:ring-4 focus:ring-orange-300"
                 />
               </div>
+
+              {location === "cherry-hill" && (
+                <fieldset className="flex flex-wrap items-center gap-x-5 gap-y-2">
+                  <legend className="sr-only">
+                    Elevator Assistance Required
+                  </legend>
+
+                  <span className="font-bold">
+                    Elevator Assistance Required:
+                  </span>
+
+                  <label className="flex cursor-pointer items-center gap-2 font-bold">
+                    <input
+                      type="radio"
+                      name="elevatorAssistanceRequired"
+                      checked={
+                        !elevatorAssistanceRequired
+                      }
+                      onChange={() =>
+                        setElevatorAssistanceRequired(
+                          false
+                        )
+                      }
+                      className="h-4 w-4 accent-orange-500"
+                    />
+                    No
+                  </label>
+
+                  <label className="flex cursor-pointer items-center gap-2 font-bold">
+                    <input
+                      type="radio"
+                      name="elevatorAssistanceRequired"
+                      checked={
+                        elevatorAssistanceRequired
+                      }
+                      onChange={() =>
+                        setElevatorAssistanceRequired(
+                          true
+                        )
+                      }
+                      className="h-4 w-4 accent-orange-500"
+                    />
+                    Yes
+                  </label>
+                </fieldset>
+              )}
 
               {error && (
                 <p

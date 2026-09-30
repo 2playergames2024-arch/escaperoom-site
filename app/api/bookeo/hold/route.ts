@@ -456,20 +456,34 @@ export async function POST(
           data
         ).toLowerCase();
 
+      const voucherFullyRedeemed =
+        serialized.includes("voucher") &&
+        (
+          serialized.includes("fully redeemed") ||
+          serialized.includes("already redeemed") ||
+          serialized.includes("redeemed") ||
+          serialized.includes("already used") ||
+          serialized.includes("fully used") ||
+          serialized.includes("no remaining balance") ||
+          serialized.includes("no remaining value")
+        );
+
       const message =
-        serialized.includes(
-          "voucher"
-        ) ||
-          serialized.includes(
-            "promotion"
-          ) ||
-          serialized.includes(
-            "coupon"
-          )
-          ? "Gift voucher or promo code not found."
-          : data.message ||
-          data.error ||
-          "Could not create booking hold.";
+        voucherFullyRedeemed
+          ? "This gift voucher has already been fully redeemed."
+          : serialized.includes(
+              "voucher"
+            ) ||
+              serialized.includes(
+                "promotion"
+              ) ||
+              serialized.includes(
+                "coupon"
+              )
+            ? "Gift voucher or promo code not found."
+            : data.message ||
+              data.error ||
+              "Could not create booking hold.";
 
       console.error(
         "Bookeo hold request rejected.",

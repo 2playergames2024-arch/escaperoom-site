@@ -51,6 +51,7 @@ export type BookingSession = {
   lastName: string;
   email: string;
   phone: string;
+  elevatorAssistanceRequired?: boolean;
   createdAt: number;
 };
 

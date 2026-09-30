@@ -193,6 +193,28 @@ export async function createFinalBookeoBooking(
                       },
                     ]
                     : [],
+
+                /*
+                 * Cherry Hill Bookeo customer custom field:
+                 * Elevator Access (field id JR9H9).
+                 *
+                 * Bookeo's API requires the plain-text choice
+                 * name ("Yes" / "No") for choice custom fields.
+                 */
+                customFields:
+                  session.location ===
+                  LOCATIONS.cherryHill.slug
+                    ? [
+                      {
+                        id: "JR9H9",
+                        value:
+                          session.elevatorAssistanceRequired ===
+                          true
+                            ? "Yes"
+                            : "No",
+                      },
+                    ]
+                    : undefined,
               },
 
               notes:
