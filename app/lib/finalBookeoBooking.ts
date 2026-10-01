@@ -243,21 +243,7 @@ export async function createFinalBookeoBooking(
       }
     })();
 
-    console.error(
-      "BOOKEO_FINAL_CREATE_RESPONSE",
-      JSON.stringify(
-        {
-          location: session.location,
-          status: response.status,
-          ok: response.ok,
-          data,
-        },
-        null,
-        2
-      )
-    );
-
-    /*
+     /*
      * A 4xx response does NOT prove that no booking
      * exists. Bookeo may reject a repeated CREATE
      * because the original booking already consumed
