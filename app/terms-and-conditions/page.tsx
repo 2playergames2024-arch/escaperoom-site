@@ -12,7 +12,7 @@ export default function TermsAndConditionsPage() {
         </h1>
 
         <p className="mb-10 font-bold text-slate-600">
-          Effective Date: June 2026
+          Effective Date: October 2026
         </p>
 
         <div className="space-y-7 leading-7">
@@ -117,6 +117,61 @@ export default function TermsAndConditionsPage() {
               other materials are the property of Escape Room Mystery and may
               not be copied or reproduced without permission.
             </p>
+          </section>
+
+          <section>
+            <h2 className="mb-2 text-2xl font-black">
+              Text Messaging Terms
+            </h2>
+
+            <div className="space-y-3">
+              <p>
+                Escape Room Mystery LLC may send recurring SMS notifications to
+                managers and designated staff members who have expressly agreed
+                to receive operational booking notifications. Messages may
+                include booking location, date, time, room, number of players,
+                customer contact information, and elevator-assistance
+                information when applicable.
+              </p>
+
+              <p>
+                Message frequency varies based on booking activity. Message and
+                data rates may apply.
+              </p>
+
+              <p>
+                <strong>
+                  To stop receiving messages, reply STOP at any time. For
+                  assistance, reply HELP.
+                </strong>
+              </p>
+
+              <p>
+                For additional assistance, contact Escape Room Mystery at
+                610-757-1053.
+              </p>
+
+              <p>
+                Carriers are not liable for delayed or undelivered messages.
+              </p>
+
+              <p>
+                Mobile information and SMS opt-in consent will not be sold or
+                shared with third parties or affiliates for marketing or
+                promotional purposes.
+              </p>
+
+              <p>
+                Please review our{" "}
+                <a
+                  href="/privacy"
+                  className="font-bold text-orange-500 underline"
+                >
+                  Privacy Policy
+                </a>{" "}
+                for information about how we handle personal information.
+              </p>
+            </div>
           </section>
 
           <section>
