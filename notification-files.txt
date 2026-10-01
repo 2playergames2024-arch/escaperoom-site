@@ -1,0 +1,4188 @@
+
+============================================================
+FILE: app\lib\bookingNotifications.ts
+============================================================
+import "server-only";
+import { Redis } from "@upstash/redis";
+import type { BookingSession } from "./booking";
+import { logBookingEvent } from "./bookingLog";
+import {
+  DAY_KEYS,
+  RECIPIENTS,
+  getEasternDayKey,
+  getEffectiveDays,
+  getNotificationSettings,
+  isWithinStoreHours,
+  type NotificationLocation,
+  type NotificationRecipientKey,
+} from "./notificationSettings";
+import { sendSms } from "./sms";
+
+const redis = Redis.fromEnv();
+
+const SOURCE_TTL_SECONDS =
+  60 * 60 * 24 * 7;
+
+const SENT_TTL_SECONDS =
+  60 * 60 * 24 * 60;
+
+function sourceKey(checkoutId: string) {
+  return `booking-notification-source:${checkoutId}`;
+}
+
+function sentKey(
+  checkoutId: string,
+  recipient: NotificationRecipientKey
+) {
+  return `booking-notification-sent:${checkoutId}:${recipient}`;
+}
+
+export async function rememberBookingNotificationSource(
+  session: BookingSession
+) {
+  if (
+    process.env.SMS_NOTIFICATIONS_ENABLED !==
+    "true"
+  ) {
+    return;
+  }
+
+  try {
+    await redis.set(
+      sourceKey(session.checkoutId),
+      session,
+      { ex: SOURCE_TTL_SECONDS }
+    );
+  } catch (error) {
+    /*
+     * Deliberately fail-open. Notification bookkeeping
+     * must never interrupt payment or booking work.
+     */
+    console.error(
+      "Could not save booking notification source.",
+      {
+        checkoutId: session.checkoutId,
+        reason:
+          error instanceof Error
+            ? error.message
+            : "unknown",
+      }
+    );
+  }
+}
+
+function parseBookingStart(
+  dateValue: string,
+  timeValue: string
+) {
+  const dateMatch =
+    dateValue.match(
+      /^(\d{4})-(\d{2})-(\d{2})$/
+    );
+
+  if (!dateMatch) {
+    return null;
+  }
+
+  const time = timeValue.trim();
+  let hour = 0;
+  let minute = 0;
+
+  const twelve = time.match(
+    /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i
+  );
+  const twentyFour = time.match(
+    /^(\d{1,2}):(\d{2})$/
+  );
+
+  if (twelve) {
+    hour = Number(twelve[1]);
+    minute = Number(twelve[2]);
+    const meridiem =
+      twelve[3].toUpperCase();
+
+    if (hour < 1 || hour > 12) {
+      return null;
+    }
+
+    hour %= 12;
+    if (meridiem === "PM") {
+      hour += 12;
+    }
+  } else if (twentyFour) {
+    hour = Number(twentyFour[1]);
+    minute = Number(twentyFour[2]);
+
+    if (hour < 0 || hour > 23) {
+      return null;
+    }
+  } else {
+    return null;
+  }
+
+  if (minute < 0 || minute > 59) {
+    return null;
+  }
+
+  const [year, month, day] =
+    dateMatch.slice(1).map(Number);
+
+  /*
+   * Escape Room Mystery is in Eastern Time. For the
+   * notification lead-time test, resolve the event
+   * against the Eastern offset applicable on that date.
+   */
+  const noonUtc = new Date(
+    Date.UTC(year, month - 1, day, 12)
+  );
+  const zone =
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      timeZoneName: "longOffset",
+    })
+      .formatToParts(noonUtc)
+      .find((part) =>
+        part.type === "timeZoneName"
+      )?.value;
+
+  const offset =
+    zone?.replace("GMT", "");
+
+  if (
+    !offset ||
+    !/^[+-]\d{2}:\d{2}$/.test(offset)
+  ) {
+    return null;
+  }
+
+  const iso =
+    `${dateValue}T${String(hour).padStart(
+      2,
+      "0"
+    )}:${String(minute).padStart(
+      2,
+      "0"
+    )}:00${offset}`;
+
+  const parsed = new Date(iso);
+
+  return Number.isNaN(parsed.getTime())
+    ? null
+    : parsed;
+}
+
+function formatDate(dateValue: string) {
+  const match =
+    dateValue.match(
+      /^(\d{4})-(\d{2})-(\d{2})$/
+    );
+
+  if (!match) {
+    return dateValue;
+  }
+
+  return `${match[2]}/${match[3]}/${match[1]}`;
+}
+
+function locationLabel(
+  location: NotificationLocation
+) {
+  return location === "cherry-hill"
+    ? "Cherry Hill"
+    : "King of Prussia";
+}
+
+function buildMessage(
+  session: BookingSession
+) {
+  const lines = [
+    `Location: ${locationLabel(
+      session.location as NotificationLocation
+    )}`,
+    `Date: ${formatDate(session.date)}`,
+    `Time: ${session.time}`,
+    `Room: ${session.roomName}`,
+    `Phone Number: ${session.phone}`,
+    `Name: ${`${session.firstName} ${session.lastName}`.trim()}`,
+    `Number of Players: ${session.players}`,
+  ];
+
+  if (
+    session.location === "cherry-hill"
+  ) {
+    lines.push(
+      `Elevator Required: ${session.elevatorAssistanceRequired
+        ? "Yes"
+        : "No"
+      }`
+    );
+  }
+
+  return lines.join("\n");
+}
+
+async function shouldNotify({
+  recipient,
+  session,
+  finalizedAt,
+}: {
+  recipient: NotificationRecipientKey;
+  session: BookingSession;
+  finalizedAt: Date;
+}) {
+  const location =
+    session.location as NotificationLocation;
+
+  if (
+    location !== "king-of-prussia" &&
+    location !== "cherry-hill"
+  ) {
+    return false;
+  }
+
+  const elevatorOverride =
+    location === "cherry-hill" &&
+    session.elevatorAssistanceRequired === true &&
+    (
+      recipient === "david" ||
+      recipient === "chTracfone"
+    );
+
+  if (elevatorOverride) {
+    return true;
+  }
+
+  const days = await getEffectiveDays(
+    recipient,
+    location
+  );
+  const day =
+    getEasternDayKey(finalizedAt);
+
+  if (
+    !DAY_KEYS.includes(day) ||
+    !days.includes(day)
+  ) {
+    return false;
+  }
+
+  const start = parseBookingStart(
+    session.date,
+    session.time
+  );
+
+  if (!start) {
+    return false;
+  }
+
+  const settings =
+    await getNotificationSettings();
+  const leadMs =
+    settings.leadTimeHours[recipient] *
+    60 *
+    60 *
+    1000;
+  const untilGame =
+    start.getTime() - finalizedAt.getTime();
+
+  if (
+    untilGame < 0 ||
+    untilGame > leadMs
+  ) {
+    return false;
+  }
+
+  if (
+    recipient === "kopTracfone" ||
+    recipient === "chTracfone"
+  ) {
+    return isWithinStoreHours(finalizedAt);
+  }
+
+  return true;
+}
+
+export async function triggerCompletedBookingNotifications({
+  checkoutId,
+  holdId,
+}: {
+  checkoutId: string;
+  holdId?: string | null;
+}) {
+  /*
+   * Absolute safety rule: this function is called only
+   * AFTER the ledger is already COMPLETE. Every error is
+   * caught here so notification work can never roll back,
+   * alter, or fail the completed booking.
+   */
+  try {
+    if (
+      process.env.SMS_NOTIFICATIONS_ENABLED !==
+      "true"
+    ) {
+      return;
+    }
+
+    let session =
+      await redis.get<BookingSession>(
+        sourceKey(checkoutId)
+      );
+
+    if (!session && holdId) {
+      const sessionId =
+        await redis.get<string>(
+          `booking-session-for-hold:${holdId}`
+        );
+
+      if (sessionId) {
+        session =
+          await redis.get<BookingSession>(
+            `booking-session:${sessionId}`
+          );
+      }
+    }
+
+    if (!session) {
+      console.error(
+        "Completed booking notification source was unavailable.",
+        { checkoutId }
+      );
+      return;
+    }
+
+    const finalizedAt = new Date();
+    const message = buildMessage(session);
+
+    const recipients =
+      Object.keys(RECIPIENTS) as
+      NotificationRecipientKey[];
+
+    for (const recipient of recipients) {
+      if (
+        !(await shouldNotify({
+          recipient,
+          session,
+          finalizedAt,
+        }))
+      ) {
+        continue;
+      }
+
+      const claim = await redis.set(
+        sentKey(checkoutId, recipient),
+        {
+          status: "sending",
+          claimedAt: Date.now(),
+        },
+        {
+          nx: true,
+          ex: SENT_TTL_SECONDS,
+        }
+      );
+
+      if (claim !== "OK") {
+        continue;
+      }
+
+      const result = await sendSms({
+        to: RECIPIENTS[recipient].phone,
+        body: message,
+      });
+
+      if (result.ok === false) {
+        await redis.del(
+          sentKey(checkoutId, recipient)
+        );
+
+        console.error(
+          "Booking SMS notification failed.",
+          {
+            checkoutId,
+            recipient,
+            reason: result.message,
+          }
+        );
+        continue;
+      }
+
+      await redis.set(
+        sentKey(checkoutId, recipient),
+        {
+          status: "sent",
+          sentAt: Date.now(),
+          messageSid: result.messageSid,
+        },
+        { ex: SENT_TTL_SECONDS }
+      );
+
+      logBookingEvent(
+        "notification.sent",
+        {
+          checkoutId,
+          metadata: {
+            recipient,
+            messageSid:
+              result.messageSid,
+          },
+        }
+      );
+    }
+  } catch (error) {
+    console.error(
+      "Completed booking notification processing failed.",
+      {
+        checkoutId,
+        reason:
+          error instanceof Error
+            ? error.message
+            : "unknown",
+      }
+    );
+  }
+}
+
+============================================================
+FILE: app\lib\notificationSettings.ts
+============================================================
+import "server-only";
+import { Redis } from "@upstash/redis";
+import type { NotificationAdminRole } from "./notificationAdminAuth";
+
+const redis = Redis.fromEnv();
+
+export const EASTERN_TIME_ZONE =
+  "America/New_York";
+
+export const DAY_KEYS = [
+  "sun",
+  "mon",
+  "tue",
+  "wed",
+  "thu",
+  "fri",
+  "sat",
+] as const;
+
+export type DayKey =
+  (typeof DAY_KEYS)[number];
+
+export type NotificationLocation =
+  | "king-of-prussia"
+  | "cherry-hill";
+
+export type NotificationRecipientKey =
+  | "noel"
+  | "david"
+  | "kopTracfone"
+  | "chTracfone";
+
+export type NotificationSettings = {
+  leadTimeHours: Record<
+    NotificationRecipientKey,
+    number
+  >;
+};
+
+export type DayMatrix = Record<
+  NotificationRecipientKey,
+  Record<NotificationLocation, DayKey[]>
+>;
+
+export const RECIPIENTS = {
+  noel: {
+    label: "Noel - KOP Site Manager",
+    phone: "+14849427519",
+    manager: true,
+  },
+  david: {
+    label: "David - Cherry Hill Site Manager",
+    phone: "+18565346794",
+    manager: true,
+  },
+  kopTracfone: {
+    label: "King of Prussia Tracfone",
+    phone: "+12672200934",
+    manager: false,
+  },
+  chTracfone: {
+    label: "Cherry Hill Tracfone",
+    phone: "+12672803946",
+    manager: false,
+  },
+} as const;
+
+export const STORE_HOURS: Record<
+  DayKey,
+  { start: string; end: string }
+> = {
+  sun: { start: "13:00", end: "19:00" },
+  mon: { start: "12:00", end: "21:00" },
+  tue: { start: "12:00", end: "21:00" },
+  wed: { start: "12:00", end: "21:00" },
+  thu: { start: "12:00", end: "21:00" },
+  fri: { start: "12:00", end: "22:30" },
+  sat: { start: "10:30", end: "22:45" },
+};
+
+export const DEFAULT_DAY_MATRIX: DayMatrix = {
+  noel: {
+    "king-of-prussia": [
+      "mon",
+      "tue",
+      "wed",
+      "fri",
+      "sat",
+    ],
+    "cherry-hill": ["mon", "tue"],
+  },
+  david: {
+    "king-of-prussia": ["sun", "thu"],
+    "cherry-hill": [
+      "sun",
+      "wed",
+      "thu",
+      "fri",
+      "sat",
+    ],
+  },
+  kopTracfone: {
+    "king-of-prussia": [...DAY_KEYS],
+    "cherry-hill": [],
+  },
+  chTracfone: {
+    "king-of-prussia": [],
+    "cherry-hill": [...DAY_KEYS],
+  },
+};
+
+const DEFAULT_SETTINGS: NotificationSettings = {
+  leadTimeHours: {
+    noel: 24,
+    david: 24,
+    kopTracfone: 24,
+    chTracfone: 24,
+  },
+};
+
+const SETTINGS_KEY =
+  "notification-settings:v1";
+
+function dayOverrideKey(
+  recipient: NotificationRecipientKey,
+  location: NotificationLocation,
+  day: DayKey
+) {
+  return `notification-day-override:v2:${recipient}:${location}:${day}`;
+}
+
+function normalizeLeadTime(
+  value: unknown,
+  fallback: number
+) {
+  const parsed = Number(value);
+
+  if (
+    !Number.isFinite(parsed) ||
+    parsed < 1 ||
+    parsed > 168
+  ) {
+    return fallback;
+  }
+
+  return Math.round(parsed * 10) / 10;
+}
+
+function getEasternCalendarParts(
+  date = new Date()
+) {
+  const parts =
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: EASTERN_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      weekday: "short",
+    }).formatToParts(date);
+
+  const value = (type: string) =>
+    parts.find((part) => part.type === type)
+      ?.value ?? "";
+
+  return {
+    year: Number(value("year")),
+    month: Number(value("month")),
+    day: Number(value("day")),
+    weekday: value("weekday")
+      .toLowerCase()
+      .slice(0, 3) as DayKey,
+  };
+}
+
+function getTimeZoneOffsetMs(
+  date: Date
+) {
+  const parts =
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: EASTERN_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(date);
+
+  const value = (type: string) =>
+    Number(
+      parts.find((part) => part.type === type)
+        ?.value ?? "0"
+    );
+
+  const representedAsUtc = Date.UTC(
+    value("year"),
+    value("month") - 1,
+    value("day"),
+    value("hour"),
+    value("minute"),
+    value("second")
+  );
+
+  return representedAsUtc - date.getTime();
+}
+
+function easternLocalMidnightToUtcMs(
+  year: number,
+  month: number,
+  day: number
+) {
+  const desiredAsUtc = Date.UTC(
+    year,
+    month - 1,
+    day,
+    0,
+    0,
+    0
+  );
+
+  let candidate = new Date(desiredAsUtc);
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const offset = getTimeZoneOffsetMs(candidate);
+    candidate = new Date(
+      desiredAsUtc - offset
+    );
+  }
+
+  return candidate.getTime();
+}
+
+function getSecondsUntilDayEnds(
+  targetDay: DayKey,
+  now = new Date()
+) {
+  const current = getEasternCalendarParts(now);
+  const currentIndex = DAY_KEYS.indexOf(
+    current.weekday
+  );
+  const targetIndex = DAY_KEYS.indexOf(
+    targetDay
+  );
+
+  const daysAhead =
+    (targetIndex - currentIndex + 7) % 7;
+
+  const targetDate = new Date(
+    Date.UTC(
+      current.year,
+      current.month - 1,
+      current.day + daysAhead
+    )
+  );
+
+  const nextDay = new Date(
+    Date.UTC(
+      targetDate.getUTCFullYear(),
+      targetDate.getUTCMonth(),
+      targetDate.getUTCDate() + 1
+    )
+  );
+
+  const expiresAt =
+    easternLocalMidnightToUtcMs(
+      nextDay.getUTCFullYear(),
+      nextDay.getUTCMonth() + 1,
+      nextDay.getUTCDate()
+    );
+
+  return Math.max(
+    60,
+    Math.ceil((expiresAt - now.getTime()) / 1000)
+  );
+}
+
+export function getEasternDayKey(
+  date = new Date()
+): DayKey {
+  return getEasternCalendarParts(date).weekday;
+}
+
+export async function getNotificationSettings() {
+  const stored =
+    await redis.get<Partial<NotificationSettings>>(
+      SETTINGS_KEY
+    );
+
+  return {
+    leadTimeHours: {
+      noel: normalizeLeadTime(
+        stored?.leadTimeHours?.noel,
+        DEFAULT_SETTINGS.leadTimeHours.noel
+      ),
+      david: normalizeLeadTime(
+        stored?.leadTimeHours?.david,
+        DEFAULT_SETTINGS.leadTimeHours.david
+      ),
+      kopTracfone: normalizeLeadTime(
+        stored?.leadTimeHours?.kopTracfone,
+        DEFAULT_SETTINGS.leadTimeHours.kopTracfone
+      ),
+      chTracfone: normalizeLeadTime(
+        stored?.leadTimeHours?.chTracfone,
+        DEFAULT_SETTINGS.leadTimeHours.chTracfone
+      ),
+    },
+  } satisfies NotificationSettings;
+}
+
+export async function updateLeadTimeHours(
+  role: NotificationAdminRole,
+  recipient: NotificationRecipientKey,
+  hours: number
+) {
+  if (!canEditRecipient(role, recipient)) {
+    throw new Error("FORBIDDEN");
+  }
+
+  const current =
+    await getNotificationSettings();
+
+  current.leadTimeHours[recipient] =
+    normalizeLeadTime(
+      hours,
+      current.leadTimeHours[recipient]
+    );
+
+  await redis.set(SETTINGS_KEY, current);
+
+  return current;
+}
+
+async function getDayOverride(
+  recipient: NotificationRecipientKey,
+  location: NotificationLocation,
+  day: DayKey
+) {
+  const value = await redis.get<string>(
+    dayOverrideKey(
+      recipient,
+      location,
+      day
+    )
+  );
+
+  if (value === "1") return true;
+  if (value === "0") return false;
+  return null;
+}
+
+export async function getEffectiveDays(
+  recipient: NotificationRecipientKey,
+  location: NotificationLocation
+) {
+  const defaults =
+    DEFAULT_DAY_MATRIX[recipient][location];
+  const effective: DayKey[] = [];
+
+  for (const day of DAY_KEYS) {
+    const override = await getDayOverride(
+      recipient,
+      location,
+      day
+    );
+
+    const enabled =
+      override ?? defaults.includes(day);
+
+    if (enabled) {
+      effective.push(day);
+    }
+  }
+
+  return effective;
+}
+
+export async function getAllEffectiveDays() {
+  const result = {} as DayMatrix;
+
+  for (
+    const recipient of Object.keys(
+      RECIPIENTS
+    ) as NotificationRecipientKey[]
+  ) {
+    result[recipient] = {
+      "king-of-prussia":
+        await getEffectiveDays(
+          recipient,
+          "king-of-prussia"
+        ),
+      "cherry-hill":
+        await getEffectiveDays(
+          recipient,
+          "cherry-hill"
+        ),
+    };
+  }
+
+  return result;
+}
+
+export async function setTemporaryDays(
+  role: NotificationAdminRole,
+  recipient: NotificationRecipientKey,
+  location: NotificationLocation,
+  days: DayKey[]
+) {
+  if (!canEditRecipient(role, recipient)) {
+    throw new Error("FORBIDDEN");
+  }
+
+  const sanitized = DAY_KEYS.filter(
+    (day) => days.includes(day)
+  );
+  const defaults =
+    DEFAULT_DAY_MATRIX[recipient][location];
+
+  for (const day of DAY_KEYS) {
+    const enabled = sanitized.includes(day);
+    const defaultEnabled =
+      defaults.includes(day);
+    const key = dayOverrideKey(
+      recipient,
+      location,
+      day
+    );
+
+    if (enabled === defaultEnabled) {
+      await redis.del(key);
+      continue;
+    }
+
+    await redis.set(
+      key,
+      enabled ? "1" : "0",
+      {
+        ex: getSecondsUntilDayEnds(day),
+      }
+    );
+  }
+
+  return sanitized;
+}
+
+export function canEditRecipient(
+  role: NotificationAdminRole,
+  _recipient: NotificationRecipientKey
+) {
+  return (
+    role === "owner" ||
+    role === "noel" ||
+    role === "david"
+  );
+}
+
+export function getPermissions(
+  role: NotificationAdminRole
+) {
+  return {
+    role,
+    editableRecipients: (
+      Object.keys(RECIPIENTS) as
+        NotificationRecipientKey[]
+    ).filter((recipient) =>
+      canEditRecipient(role, recipient)
+    ),
+  };
+}
+
+export function isWithinStoreHours(
+  date = new Date()
+) {
+  const day = getEasternDayKey(date);
+  const parts =
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: EASTERN_TIME_ZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(date);
+
+  const hour = Number(
+    parts.find((part) =>
+      part.type === "hour"
+    )?.value ?? "0"
+  );
+  const minute = Number(
+    parts.find((part) =>
+      part.type === "minute"
+    )?.value ?? "0"
+  );
+  const currentMinutes =
+    hour * 60 + minute;
+
+  const toMinutes = (value: string) => {
+    const [h, m] = value
+      .split(":")
+      .map(Number);
+    return h * 60 + m;
+  };
+
+  const hours = STORE_HOURS[day];
+
+  return (
+    currentMinutes >=
+      toMinutes(hours.start) &&
+    currentMinutes <=
+      toMinutes(hours.end)
+  );
+}
+
+============================================================
+FILE: app\lib\sms.ts
+============================================================
+import "server-only";
+
+export type SmsResult =
+  | { ok: true; messageSid: string | null }
+  | { ok: false; message: string };
+
+export async function sendSms({
+  to,
+  body,
+}: {
+  to: string;
+  body: string;
+}): Promise<SmsResult> {
+  if (
+    process.env.SMS_NOTIFICATIONS_ENABLED !==
+    "true"
+  ) {
+    return {
+      ok: false,
+      message: "SMS notifications are disabled.",
+    };
+  }
+
+  const accountSid =
+    process.env.TWILIO_ACCOUNT_SID;
+  const authToken =
+    process.env.TWILIO_AUTH_TOKEN;
+  const from =
+    process.env.TWILIO_FROM_NUMBER;
+
+  if (!accountSid || !authToken || !from) {
+    return {
+      ok: false,
+      message:
+        "Twilio is not fully configured.",
+    };
+  }
+
+  const form = new URLSearchParams({
+    To: to,
+    From: from,
+    Body: body,
+  });
+
+  try {
+    const response = await fetch(
+      `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
+      {
+        method: "POST",
+        headers: {
+          Authorization:
+            `Basic ${Buffer.from(
+              `${accountSid}:${authToken}`
+            ).toString("base64")}`,
+          "Content-Type":
+            "application/x-www-form-urlencoded",
+        },
+        body: form.toString(),
+        signal: AbortSignal.timeout(5000),
+      }
+    );
+
+    const data = (await response.json()) as {
+      sid?: string;
+      message?: string;
+    };
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        message:
+          data.message ||
+          `Twilio returned HTTP ${response.status}.`,
+      };
+    }
+
+    return {
+      ok: true,
+      messageSid: data.sid ?? null,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Twilio request failed.",
+    };
+  }
+}
+
+============================================================
+FILE: app\api\admin\notifications\route.ts
+============================================================
+import { NextResponse } from "next/server";
+import { Redis } from "@upstash/redis";
+import { incrementRateLimit } from "@/app/lib/rateLimit";
+import {
+  resolveNotificationAdminRole,
+} from "@/app/lib/notificationAdminAuth";
+import {
+  DAY_KEYS,
+  DEFAULT_DAY_MATRIX,
+  RECIPIENTS,
+  STORE_HOURS,
+  canEditRecipient,
+  getAllEffectiveDays,
+  getNotificationSettings,
+  getPermissions,
+  setTemporaryDays,
+  updateLeadTimeHours,
+  type DayKey,
+  type NotificationLocation,
+  type NotificationRecipientKey,
+} from "@/app/lib/notificationSettings";
+
+const redis = Redis.fromEnv();
+
+function getClientIp(request: Request) {
+  return (
+    request.headers
+      .get("x-forwarded-for")
+      ?.split(",")[0]
+      ?.trim() ||
+    request.headers.get("x-real-ip") ||
+    "unknown"
+  );
+}
+
+async function authenticate(request: Request) {
+  const role =
+    resolveNotificationAdminRole(
+      request.headers.get(
+        "x-notification-secret"
+      )
+    );
+
+  if (role) {
+    return { response: null, role };
+  }
+
+  const ip = getClientIp(request);
+  const attempts =
+    await incrementRateLimit(
+      redis,
+      `rate-limit:admin-notifications:${ip}`,
+      600
+    );
+
+  if (attempts > 20) {
+    return {
+      response: NextResponse.json(
+        { error: "Too many invalid access-code attempts." },
+        {
+          status: 429,
+          headers: { "Retry-After": "600" },
+        }
+      ),
+      role: null,
+    };
+  }
+
+  return {
+    response: NextResponse.json(
+      { error: "Unauthorized." },
+      { status: 401 }
+    ),
+    role: null,
+  };
+}
+
+function getAllowedLocations(
+  recipient: NotificationRecipientKey
+): NotificationLocation[] {
+  if (recipient === "kopTracfone") {
+    return ["king-of-prussia"];
+  }
+
+  if (recipient === "chTracfone") {
+    return ["cherry-hill"];
+  }
+
+  return [
+    "king-of-prussia",
+    "cherry-hill",
+  ];
+}
+
+export async function GET(request: Request) {
+  try {
+    const auth = await authenticate(request);
+    if (auth.response || !auth.role) {
+      return auth.response!;
+    }
+
+    const [settings, effectiveDays] =
+      await Promise.all([
+        getNotificationSettings(),
+        getAllEffectiveDays(),
+      ]);
+
+    return NextResponse.json({
+      permissions: getPermissions(auth.role),
+      settings,
+      effectiveDays,
+      defaults: DEFAULT_DAY_MATRIX,
+      recipients: Object.fromEntries(
+        Object.entries(RECIPIENTS).map(
+          ([key, value]) => [
+            key,
+            {
+              label: value.label,
+              phoneLast4:
+                value.phone.slice(-4),
+              manager: value.manager,
+            },
+          ]
+        )
+      ),
+      storeHours: STORE_HOURS,
+      smsEnabled:
+        process.env.SMS_NOTIFICATIONS_ENABLED ===
+        "true",
+    });
+  } catch (error) {
+    console.error(
+      "Notification administration GET failed.",
+      error
+    );
+    return NextResponse.json(
+      { error: "Could not load notification settings." },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const auth = await authenticate(request);
+    if (auth.response || !auth.role) {
+      return auth.response!;
+    }
+
+    const body = await request.json();
+
+    if (body.action !== "saveAll") {
+      return NextResponse.json(
+        { error: "Unknown action." },
+        { status: 400 }
+      );
+    }
+
+    const leadTimeHours =
+      body.leadTimeHours &&
+      typeof body.leadTimeHours === "object"
+        ? body.leadTimeHours as Record<string, unknown>
+        : {};
+
+    const effectiveDays =
+      body.effectiveDays &&
+      typeof body.effectiveDays === "object"
+        ? body.effectiveDays as Record<
+            string,
+            Record<string, unknown>
+          >
+        : {};
+
+    for (
+      const recipient of Object.keys(
+        RECIPIENTS
+      ) as NotificationRecipientKey[]
+    ) {
+      if (!canEditRecipient(auth.role, recipient)) {
+        continue;
+      }
+
+      const hours = Number(
+        leadTimeHours[recipient]
+      );
+
+      if (
+        !Number.isFinite(hours) ||
+        hours < 1 ||
+        hours > 168
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Lead time must be between 1 and 168 hours.",
+          },
+          { status: 400 }
+        );
+      }
+
+      await updateLeadTimeHours(
+        auth.role,
+        recipient,
+        hours
+      );
+
+      for (
+        const location of getAllowedLocations(
+          recipient
+        )
+      ) {
+        const rawDays =
+          effectiveDays[recipient]?.[location];
+        const days: string[] =
+          Array.isArray(rawDays)
+            ? rawDays.map((day: unknown) =>
+                String(day)
+              )
+            : [];
+
+        if (
+          days.some(
+            (day) =>
+              !DAY_KEYS.includes(
+                day as DayKey
+              )
+          )
+        ) {
+          return NextResponse.json(
+            { error: "Invalid day selection." },
+            { status: 400 }
+          );
+        }
+
+        await setTemporaryDays(
+          auth.role,
+          recipient,
+          location,
+          days as DayKey[]
+        );
+      }
+    }
+
+    const [settings, savedDays] =
+      await Promise.all([
+        getNotificationSettings(),
+        getAllEffectiveDays(),
+      ]);
+
+    return NextResponse.json({
+      settings,
+      effectiveDays: savedDays,
+    });
+  } catch (error) {
+    console.error(
+      "Notification administration PATCH failed.",
+      error
+    );
+    return NextResponse.json(
+      { error: "Could not update notification settings." },
+      { status: 500 }
+    );
+  }
+}
+
+============================================================
+FILE: app\admin\notifications\NotificationAdminClient.tsx
+============================================================
+"use client";
+
+import { useMemo, useState } from "react";
+
+const DAYS = [
+  ["sun", "Sun"],
+  ["mon", "Mon"],
+  ["tue", "Tue"],
+  ["wed", "Wed"],
+  ["thu", "Thu"],
+  ["fri", "Fri"],
+  ["sat", "Sat"],
+] as const;
+
+const LOCATION_LABELS = {
+  "king-of-prussia": "King of Prussia",
+  "cherry-hill": "Cherry Hill",
+} as const;
+
+type RecipientKey =
+  | "noel"
+  | "david"
+  | "kopTracfone"
+  | "chTracfone";
+
+type LocationKey =
+  keyof typeof LOCATION_LABELS;
+
+type DayKey =
+  (typeof DAYS)[number][0];
+
+type Data = {
+  permissions: {
+    role: "owner" | "noel" | "david";
+    editableRecipients: RecipientKey[];
+  };
+  settings: {
+    leadTimeHours: Record<RecipientKey, number>;
+  };
+  effectiveDays: Record<
+    RecipientKey,
+    Record<LocationKey, DayKey[]>
+  >;
+  defaults: Record<
+    RecipientKey,
+    Record<LocationKey, DayKey[]>
+  >;
+  recipients: Record<
+    RecipientKey,
+    {
+      label: string;
+      phoneLast4: string;
+      manager: boolean;
+    }
+  >;
+  storeHours: Record<
+    DayKey,
+    { start: string; end: string }
+  >;
+  smsEnabled: boolean;
+};
+
+type Draft = {
+  leadTimeHours: Record<RecipientKey, number>;
+  effectiveDays: Record<
+    RecipientKey,
+    Record<LocationKey, DayKey[]>
+  >;
+};
+
+function cloneDraft(data: Data): Draft {
+  return {
+    leadTimeHours: {
+      ...data.settings.leadTimeHours,
+    },
+    effectiveDays: {
+      noel: {
+        "king-of-prussia": [
+          ...data.effectiveDays.noel["king-of-prussia"],
+        ],
+        "cherry-hill": [
+          ...data.effectiveDays.noel["cherry-hill"],
+        ],
+      },
+      david: {
+        "king-of-prussia": [
+          ...data.effectiveDays.david["king-of-prussia"],
+        ],
+        "cherry-hill": [
+          ...data.effectiveDays.david["cherry-hill"],
+        ],
+      },
+      kopTracfone: {
+        "king-of-prussia": [
+          ...data.effectiveDays.kopTracfone["king-of-prussia"],
+        ],
+        "cherry-hill": [
+          ...data.effectiveDays.kopTracfone["cherry-hill"],
+        ],
+      },
+      chTracfone: {
+        "king-of-prussia": [
+          ...data.effectiveDays.chTracfone["king-of-prussia"],
+        ],
+        "cherry-hill": [
+          ...data.effectiveDays.chTracfone["cherry-hill"],
+        ],
+      },
+    },
+  };
+}
+
+function formatClock(value: string) {
+  const [hourValue, minute] =
+    value.split(":");
+  const hour = Number(hourValue);
+  const suffix = hour >= 12 ? "PM" : "AM";
+  const display = hour % 12 || 12;
+  return `${display}:${minute} ${suffix}`;
+}
+
+export default function NotificationAdminClient() {
+  const [secret, setSecret] = useState("");
+  const [data, setData] = useState<Data | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [savedMessage, setSavedMessage] = useState("");
+
+  async function request(
+    method: "GET" | "PATCH",
+    body?: unknown
+  ) {
+    const response = await fetch(
+      "/api/admin/notifications",
+      {
+        method,
+        headers: {
+          "x-notification-secret": secret,
+          ...(body
+            ? { "Content-Type": "application/json" }
+            : {}),
+        },
+        body: body
+          ? JSON.stringify(body)
+          : undefined,
+        cache: "no-store",
+      }
+    );
+
+    const json = await response.json();
+    if (!response.ok) {
+      throw new Error(
+        json.error || "Request failed."
+      );
+    }
+    return json;
+  }
+
+  async function login() {
+    setError("");
+    try {
+      const json = await request("GET") as Data;
+      setData(json);
+      setDraft(cloneDraft(json));
+      setDirty(false);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not sign in."
+      );
+    }
+  }
+
+  function setLeadTime(
+    recipient: RecipientKey,
+    value: string
+  ) {
+    if (!draft) return;
+
+    setDraft({
+      ...draft,
+      leadTimeHours: {
+        ...draft.leadTimeHours,
+        [recipient]: Number(value),
+      },
+    });
+    setDirty(true);
+    setSavedMessage("");
+  }
+
+  function toggleDay(
+    recipient: RecipientKey,
+    location: LocationKey,
+    day: DayKey
+  ) {
+    if (!draft) return;
+
+    const current =
+      draft.effectiveDays[recipient][location];
+    const days = current.includes(day)
+      ? current.filter((value) => value !== day)
+      : [...current, day];
+
+    setDraft({
+      ...draft,
+      effectiveDays: {
+        ...draft.effectiveDays,
+        [recipient]: {
+          ...draft.effectiveDays[recipient],
+          [location]: days,
+        },
+      },
+    });
+    setDirty(true);
+    setSavedMessage("");
+  }
+
+  async function saveAll() {
+    if (!data || !draft || !dirty || saving) {
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setSavedMessage("");
+
+    try {
+      const editable =
+        data.permissions.editableRecipients;
+
+      const leadTimeHours =
+        Object.fromEntries(
+          editable.map((recipient) => [
+            recipient,
+            draft.leadTimeHours[recipient],
+          ])
+        );
+
+      const effectiveDays =
+        Object.fromEntries(
+          editable.map((recipient) => [
+            recipient,
+            draft.effectiveDays[recipient],
+          ])
+        );
+
+      await request("PATCH", {
+        action: "saveAll",
+        leadTimeHours,
+        effectiveDays,
+      });
+
+      const refreshed = await request("GET") as Data;
+      setData(refreshed);
+      setDraft(cloneDraft(refreshed));
+      setDirty(false);
+      setSavedMessage("Saved");
+      window.setTimeout(
+        () => setSavedMessage(""),
+        1800
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not save."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const editable = useMemo(
+    () =>
+      new Set(
+        data?.permissions.editableRecipients ?? []
+      ),
+    [data]
+  );
+
+  if (!data || !draft) {
+    return (
+      <main className="min-h-screen bg-neutral-950 px-4 py-10 text-white sm:px-6 sm:py-14">
+        <div className="mx-auto max-w-md rounded-2xl border border-white/10 bg-neutral-900 p-5 shadow-2xl sm:p-6">
+          <h1 className="text-2xl font-semibold">
+            Notification Administration
+          </h1>
+          <p className="mt-2 text-sm text-neutral-400">
+            Enter your notification access code.
+          </p>
+          <input
+            type="password"
+            value={secret}
+            onChange={(event) =>
+              setSecret(event.target.value)
+            }
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                void login();
+              }
+            }}
+            className="mt-4 w-full rounded-lg border border-white/15 bg-black px-4 py-3 outline-none focus:border-white/40"
+            autoComplete="current-password"
+          />
+          <button
+            onClick={() => void login()}
+            className="mt-3 w-full rounded-lg bg-white px-4 py-3 font-semibold text-black hover:bg-neutral-200"
+          >
+            Open Notifications
+          </button>
+          {error ? (
+            <p className="mt-3 text-sm text-red-400">
+              {error}
+            </p>
+          ) : null}
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="min-h-screen bg-neutral-950 px-3 pb-6 text-white sm:px-5">
+      <div className="sticky top-0 z-30 -mx-3 border-b border-white/10 bg-neutral-950/95 px-3 py-2.5 backdrop-blur sm:-mx-5 sm:px-5">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate text-base font-semibold sm:text-lg">
+              Booking Notifications
+            </div>
+            <div className="mt-0.5 flex items-center gap-2 text-xs text-neutral-400">
+              <span
+                className={`rounded-full px-2 py-0.5 font-semibold ${
+                  data.smsEnabled
+                    ? "bg-green-500/15 text-green-300"
+                    : "bg-amber-500/15 text-amber-300"
+                }`}
+              >
+                SMS {data.smsEnabled ? "ON" : "OFF"}
+              </span>
+              {savedMessage ? (
+                <span className="text-green-300">
+                  {savedMessage}
+                </span>
+              ) : dirty ? (
+                <span className="text-amber-300">
+                  Unsaved changes
+                </span>
+              ) : null}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => void saveAll()}
+            disabled={!dirty || saving}
+            className="shrink-0 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            {saving ? "Saving..." : "Save Changes"}
+          </button>
+        </div>
+      </div>
+
+      <div className="mx-auto max-w-6xl pt-4">
+        <p className="mb-4 text-sm leading-5 text-neutral-400">
+          Day changes are temporary. Each day keeps its override until that day ends at midnight Eastern.
+        </p>
+
+        {error ? (
+          <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
+            {error}
+          </div>
+        ) : null}
+
+        <div className="grid gap-3 lg:grid-cols-2">
+          {(Object.keys(data.recipients) as RecipientKey[]).map(
+            (recipient) => {
+              const info = data.recipients[recipient];
+              const canEdit = editable.has(recipient);
+              const locations: LocationKey[] =
+                recipient === "kopTracfone"
+                  ? ["king-of-prussia"]
+                  : recipient === "chTracfone"
+                    ? ["cherry-hill"]
+                    : [
+                        "king-of-prussia",
+                        "cherry-hill",
+                      ];
+
+              return (
+                <section
+                  key={recipient}
+                  className="rounded-xl border border-white/10 bg-neutral-900 p-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h2 className="text-lg font-semibold leading-tight">
+                        {info.label}
+                      </h2>
+                      <p className="mt-1 text-xs text-neutral-500">
+                        Phone ending in {info.phoneLast4}
+                      </p>
+                    </div>
+                    {!canEdit ? (
+                      <span className="shrink-0 rounded bg-white/5 px-2 py-1 text-xs text-neutral-500">
+                        View only
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-3 flex items-center gap-3">
+                    <label
+                      htmlFor={`${recipient}-hours`}
+                      className="text-sm font-medium text-neutral-300"
+                    >
+                      Lead time
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        id={`${recipient}-hours`}
+                        type="number"
+                        min="1"
+                        max="168"
+                        step="1"
+                        value={
+                          Number.isFinite(
+                            draft.leadTimeHours[recipient]
+                          )
+                            ? draft.leadTimeHours[recipient]
+                            : ""
+                        }
+                        onChange={(event) =>
+                          setLeadTime(
+                            recipient,
+                            event.target.value
+                          )
+                        }
+                        disabled={!canEdit}
+                        className="w-20 rounded-lg border border-white/15 bg-black px-3 py-1.5 text-sm disabled:opacity-50"
+                      />
+                      <span className="text-xs text-neutral-500">
+                        hours
+                      </span>
+                    </div>
+                  </div>
+
+                  {locations.map((location) => (
+                    <div
+                      key={location}
+                      className="mt-3"
+                    >
+                      <div className="mb-1.5 text-sm font-medium text-neutral-300">
+                        {LOCATION_LABELS[location]}
+                      </div>
+                      <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-7">
+                        {DAYS.map(([day, label]) => {
+                          const active =
+                            draft.effectiveDays[recipient][location].includes(day);
+                          const changed =
+                            active !==
+                            data.defaults[recipient][location].includes(day);
+
+                          return (
+                            <button
+                              key={day}
+                              type="button"
+                              disabled={!canEdit}
+                              onClick={() =>
+                                toggleDay(
+                                  recipient,
+                                  location,
+                                  day
+                                )
+                              }
+                              className={`min-h-10 rounded-lg border px-2 py-2 text-sm font-medium ${
+                                active
+                                  ? "border-white/40 bg-white text-black"
+                                  : "border-white/10 bg-black text-neutral-500"
+                              } ${
+                                changed
+                                  ? "ring-2 ring-amber-400/50"
+                                  : ""
+                              } disabled:cursor-not-allowed disabled:opacity-50`}
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </section>
+              );
+            }
+          )}
+        </div>
+
+        <section className="mt-3 rounded-xl border border-white/10 bg-neutral-900 p-4">
+          <h2 className="text-lg font-semibold">
+            Tracfone Store Hours
+          </h2>
+          <p className="mt-1 text-xs leading-5 text-neutral-400 sm:text-sm">
+            Display only. Normal Tracfone alerts send only when the booking is finalized during these hours. Cherry Hill elevator-required alerts override store hours.
+          </p>
+          <div className="mt-3 grid grid-cols-2 gap-1.5 sm:grid-cols-4 lg:grid-cols-7">
+            {DAYS.map(([day, label]) => (
+              <div
+                key={day}
+                className="rounded-lg bg-black px-3 py-2 text-sm"
+              >
+                <div className="font-medium">
+                  {label}
+                </div>
+                <div className="mt-0.5 text-xs text-neutral-400">
+                  {formatClock(data.storeHours[day].start)} - {formatClock(data.storeHours[day].end)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+============================================================
+FILE: app\api\authorize\auth-only\route.ts
+============================================================
+import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
+import { Redis } from "@upstash/redis";
+import {
+  type BookingSession,
+  isValidBookingSessionId,
+} from "@/app/lib/booking";
+import {
+  claimCheckoutForAuthorization,
+  updateBookingLedgerRecord,
+} from "@/app/lib/bookingLedger";
+import {
+  BOOKING_STATES,
+} from "@/app/lib/bookingState";
+import {
+  ensurePreAuthHold,
+} from "@/app/lib/preAuthHold";
+import {
+  captureAuthorizeAuthorization,
+  getAuthorizeGatewayConfig,
+  voidAuthorizeAuthorization,
+} from "@/app/lib/authorizeSandbox";
+import {
+  recoverFailedCapture,
+} from "@/app/lib/captureRecovery";
+import {
+  createFinalBookeoBooking,
+} from "@/app/lib/finalBookeoBooking";
+import {
+  lookupFinalBookeoBooking,
+} from "@/app/lib/bookeoBookingLookup";
+import {
+  logBookingEvent,
+} from "@/app/lib/bookingLog";
+import {
+  ensureBookeoPaymentRecorded,
+} from "@/app/lib/bookeoPaymentSync";
+import {
+  claimPaymentRouteOwnership,
+  isBookingWatchdogTakeoverRequested,
+  releasePaymentRouteOwnership,
+} from "@/app/lib/bookingWatchdog";
+import {
+  rememberBookingNotificationSource,
+} from "@/app/lib/bookingNotifications";
+
+const redis = Redis.fromEnv();
+
+function watchdogTakeoverResponse() {
+  return NextResponse.json(
+    {
+      watchdogTakeover: true,
+      uncertain: true,
+      error:
+        "The booking watchdog is verifying the final transaction state.",
+    },
+    {
+      status: 202,
+    }
+  );
+}
+
+
+async function captureBookedCheckout({
+  checkoutId,
+  transactionId,
+  amount,
+  bookeoBookingId,
+  responseData,
+}: {
+  checkoutId: string;
+  transactionId: string;
+  amount: number;
+  bookeoBookingId: string;
+  responseData: Record<string, unknown>;
+}) {
+  /*
+   * STEP 23:
+   * Bookeo is positively BOOKED.
+   *
+   * If the 30-second watchdog has taken ownership,
+   * stop here before starting a new capture request.
+   */
+  if (
+    await isBookingWatchdogTakeoverRequested(
+      checkoutId
+    )
+  ) {
+    return watchdogTakeoverResponse();
+  }
+
+  /*
+   * Make the first prior-auth capture attempt.
+   */
+  logBookingEvent(
+    "capture.started",
+    {
+      checkoutId,
+      authorizeTransactionId:
+        transactionId,
+      bookeoBookingId,
+      previousStatus:
+        BOOKING_STATES.BOOKED,
+    }
+  );
+
+  const captureResult =
+    await captureAuthorizeAuthorization(
+      transactionId,
+      amount
+    );
+
+  if (captureResult.ok) {
+    logBookingEvent(
+      "capture.succeeded",
+      {
+        checkoutId,
+        authorizeTransactionId:
+          captureResult.transactionId,
+        bookeoBookingId,
+        result: "captured",
+      }
+    );
+
+    const paymentSync =
+      await ensureBookeoPaymentRecorded({
+        checkoutId,
+        bookingNumber:
+          bookeoBookingId,
+        transactionId:
+          captureResult.transactionId,
+        amount,
+      });
+
+    if (paymentSync.ok) {
+      await updateBookingLedgerRecord({
+        checkoutId,
+        status:
+          BOOKING_STATES.COMPLETE,
+        errorCode: null,
+        errorMessage: null,
+        errorData: {},
+      });
+    } else {
+      /*
+       * The customer is already booked and captured.
+       * Never charge, capture, void, or cancel again
+       * because Bookeo bookkeeping sync failed.
+       * Leave the row BOOKED so delayed reconciliation
+       * can retry only the Bookeo payment record.
+       */
+      await updateBookingLedgerRecord({
+        checkoutId,
+        status:
+          BOOKING_STATES.BOOKED,
+        errorCode:
+          "BOOKEO_PAYMENT_SYNC_PENDING",
+        errorMessage:
+          paymentSync.message,
+        errorData: {
+          authorizeTransactionId:
+            captureResult.transactionId,
+          bookeoBookingId,
+          amount,
+          uncertain:
+            paymentSync.uncertain,
+        },
+      });
+    }
+
+    return NextResponse.json({
+      ...responseData,
+
+      authorized: true,
+      booked: true,
+      captured: true,
+      complete: true,
+      bookeoPaymentSyncPending:
+        !paymentSync.ok,
+
+      transactionId:
+        captureResult.transactionId,
+
+      bookeoBookingId,
+    });
+  }
+
+  /*
+   * STEP 24:
+   * The first capture did not produce a confirmed
+   * success. Persist CAPTURE_FAILED first.
+   */
+  logBookingEvent(
+    "capture.failed",
+    {
+      checkoutId,
+      authorizeTransactionId:
+        transactionId,
+      bookeoBookingId,
+      result:
+        captureResult.uncertain
+          ? "uncertain"
+          : "rejected",
+      errorCode:
+        captureResult.uncertain
+          ? "CAPTURE_UNCERTAIN"
+          : "CAPTURE_REJECTED",
+    },
+    captureResult.uncertain
+      ? "warn"
+      : "error"
+  );
+
+  await updateBookingLedgerRecord({
+    checkoutId,
+
+    status:
+      BOOKING_STATES.CAPTURE_FAILED,
+
+    errorCode:
+      captureResult.uncertain
+        ? "CAPTURE_UNCERTAIN"
+        : "CAPTURE_REJECTED",
+
+    errorMessage:
+      captureResult.message,
+
+    errorData: {
+      authorizeTransactionId:
+        transactionId,
+
+      bookeoBookingId,
+
+      uncertain:
+        captureResult.uncertain,
+    },
+  });
+
+  /*
+   * If the watchdog requested takeover while the
+   * first capture call was in flight, leave the
+   * durable CAPTURE_FAILED state for the watchdog
+   * to resolve from Authorize.Net's real status.
+   */
+  if (
+    await isBookingWatchdogTakeoverRequested(
+      checkoutId
+    )
+  ) {
+    return watchdogTakeoverResponse();
+  }
+
+  /*
+   * Never retry capture blindly.
+   *
+   * recoverFailedCapture() asks Authorize.Net for
+   * the real transaction state before every retry.
+   */
+  const recoveryResult =
+    await recoverFailedCapture({
+      checkoutId,
+      transactionId,
+      bookeoBookingId,
+      amount,
+    });
+
+  if (recoveryResult.ok) {
+    logBookingEvent(
+      "capture.recovered",
+      {
+        checkoutId,
+        authorizeTransactionId:
+          recoveryResult.transactionId,
+        bookeoBookingId,
+        result:
+          recoveryResult.recoveredBy,
+        attempt:
+          recoveryResult.retryAttempts,
+      }
+    );
+
+    return NextResponse.json({
+      ...responseData,
+
+      authorized: true,
+      booked: true,
+      captured: true,
+      complete: true,
+      bookeoPaymentSyncPending:
+        recoveryResult.bookeoPaymentSyncPending,
+      captureRecovered:
+        true,
+
+      captureRecoveredBy:
+        recoveryResult.recoveredBy,
+
+      captureRetryAttempts:
+        recoveryResult.retryAttempts,
+
+      transactionId:
+        recoveryResult.transactionId,
+
+      bookeoBookingId,
+    });
+  }
+
+  logBookingEvent(
+    "capture.recovery_exhausted",
+    {
+      checkoutId,
+      authorizeTransactionId:
+        transactionId,
+      bookeoBookingId,
+      result:
+        recoveryResult.finalStatus,
+      attempt:
+        recoveryResult.retryAttempts,
+      errorCode:
+        "CAPTURE_RECOVERY_EXHAUSTED",
+    },
+    "error"
+  );
+
+  return NextResponse.json(
+    {
+      ...responseData,
+
+      authorized: true,
+      booked: true,
+      captured: false,
+      captureFailed: true,
+      recoveryRequired: true,
+
+      transactionId,
+      bookeoBookingId,
+
+      captureRetryAttempts:
+        recoveryResult.retryAttempts,
+
+      authorizeStatus:
+        recoveryResult.finalStatus,
+
+      staffAlertSent:
+        recoveryResult.alertSent,
+
+      error:
+        "The Bookeo booking was created, but payment capture recovery was exhausted.",
+    },
+    {
+      status: 502,
+    }
+  );
+}
+
+
+async function completeZeroDollarCheckout(
+  session: BookingSession
+) {
+  const completeBooking = async (
+    bookeoBookingId: string,
+    responseData: Record<string, unknown> = {}
+  ) => {
+    await updateBookingLedgerRecord({
+      checkoutId:
+        session.checkoutId,
+      bookeoBookingId,
+      status:
+        BOOKING_STATES.BOOKED,
+      errorCode: null,
+      errorMessage: null,
+    });
+
+    await updateBookingLedgerRecord({
+      checkoutId:
+        session.checkoutId,
+      status:
+        BOOKING_STATES.COMPLETE,
+      errorCode: null,
+      errorMessage: null,
+      errorData: {},
+    });
+
+    return NextResponse.json({
+      ...responseData,
+      zeroPayment: true,
+      authorized: false,
+      booked: true,
+      captured: false,
+      complete: true,
+      bookeoBookingId,
+    });
+  };
+
+  const firstCreate =
+    await createFinalBookeoBooking(
+      session,
+      null
+    );
+
+  if (firstCreate.ok) {
+    return completeBooking(
+      firstCreate.bookingId
+    );
+  }
+
+  /*
+   * A failed/uncertain CREATE may still have reached
+   * Bookeo. Never immediately send another CREATE.
+   * First verify by our unique checkout externalRef.
+   */
+  for (
+    let lookupAttempt = 1;
+    lookupAttempt <= 3;
+    lookupAttempt++
+  ) {
+    if (lookupAttempt > 1) {
+      await new Promise(
+        (resolve) =>
+          setTimeout(
+            resolve,
+            lookupAttempt === 2
+              ? 1000
+              : 2000
+          )
+      );
+    }
+
+    const lookupResult =
+      await lookupFinalBookeoBooking(
+        session
+      );
+
+    if (
+      lookupResult.ok &&
+      lookupResult.result ===
+        "FOUND"
+    ) {
+      return completeBooking(
+        lookupResult.bookingId,
+        {
+          recoveredByLookup:
+            true,
+        }
+      );
+    }
+
+    if (
+      lookupResult.ok &&
+      lookupResult.result ===
+        "AMBIGUOUS"
+    ) {
+      await updateBookingLedgerRecord({
+        checkoutId:
+          session.checkoutId,
+        errorCode:
+          "ZERO_DOLLAR_LOOKUP_MULTIPLE_MATCHES",
+        errorMessage:
+          "Multiple Bookeo bookings matched the zero-dollar checkout.",
+        errorData: {
+          matches:
+            lookupResult.matches,
+        },
+      });
+
+      return NextResponse.json(
+        {
+          zeroPayment: true,
+          uncertain: true,
+          error:
+            "The booking needs verification before another attempt.",
+        },
+        {
+          status: 409,
+        }
+      );
+    }
+
+    if (!lookupResult.ok) {
+      await updateBookingLedgerRecord({
+        checkoutId:
+          session.checkoutId,
+        errorCode:
+          "ZERO_DOLLAR_LOOKUP_FAILED",
+        errorMessage:
+          lookupResult.message,
+      });
+
+      return NextResponse.json(
+        {
+          zeroPayment: true,
+          uncertain: true,
+          error:
+            "Bookeo booking verification could not be completed.",
+        },
+        {
+          status: 502,
+        }
+      );
+    }
+  }
+
+  /*
+   * Three successful lookups found no booking.
+   * Re-validate/recreate the hold, then allow exactly
+   * one controlled second CREATE.
+   */
+  const retryHoldResult =
+    await ensurePreAuthHold(
+      session
+    );
+
+  if (!retryHoldResult.ok) {
+    await updateBookingLedgerRecord({
+      checkoutId:
+        session.checkoutId,
+      status:
+        BOOKING_STATES.FAILED,
+      errorCode:
+        retryHoldResult.reason ===
+        "UNAVAILABLE"
+          ? "ZERO_DOLLAR_HOLD_UNAVAILABLE"
+          : "ZERO_DOLLAR_HOLD_CHECK_FAILED",
+      errorMessage:
+        retryHoldResult.reason ===
+        "UNAVAILABLE"
+          ? "The Bookeo hold became unavailable."
+          : "Bookeo could not verify the hold before zero-dollar recovery.",
+    });
+
+    return NextResponse.json(
+      {
+        zeroPayment: true,
+        unavailable:
+          retryHoldResult.reason ===
+          "UNAVAILABLE",
+        error:
+          retryHoldResult.reason ===
+          "UNAVAILABLE"
+            ? "Sorry, those seats are no longer available."
+            : "Bookeo could not safely verify the booking hold.",
+      },
+      {
+        status:
+          retryHoldResult.reason ===
+          "UNAVAILABLE"
+            ? 409
+            : 502,
+      }
+    );
+  }
+
+  session =
+    retryHoldResult.session;
+
+  const secondCreate =
+    await createFinalBookeoBooking(
+      session,
+      null
+    );
+
+  if (secondCreate.ok) {
+    return completeBooking(
+      secondCreate.bookingId,
+      {
+        recoveredBySecondCreate:
+          true,
+      }
+    );
+  }
+
+  const finalLookup =
+    await lookupFinalBookeoBooking(
+      session
+    );
+
+  if (
+    finalLookup.ok &&
+    finalLookup.result ===
+      "FOUND"
+  ) {
+    return completeBooking(
+      finalLookup.bookingId,
+      {
+        recoveredByFinalLookup:
+          true,
+      }
+    );
+  }
+
+  if (
+    finalLookup.ok &&
+    finalLookup.result ===
+      "NO_MATCH"
+  ) {
+    await updateBookingLedgerRecord({
+      checkoutId:
+        session.checkoutId,
+      status:
+        BOOKING_STATES.FAILED,
+      errorCode:
+        "ZERO_DOLLAR_FINAL_NO_MATCH",
+      errorMessage:
+        "Two Bookeo CREATE attempts completed without a confirmed booking.",
+    });
+
+    return NextResponse.json(
+      {
+        zeroPayment: true,
+        error:
+          "The booking could not be confirmed. Please start again.",
+      },
+      {
+        status: 502,
+      }
+    );
+  }
+
+  await updateBookingLedgerRecord({
+    checkoutId:
+      session.checkoutId,
+    errorCode:
+      finalLookup.ok
+        ? "ZERO_DOLLAR_FINAL_LOOKUP_AMBIGUOUS"
+        : "ZERO_DOLLAR_FINAL_LOOKUP_FAILED",
+    errorMessage:
+      finalLookup.ok
+        ? "Multiple Bookeo bookings matched the zero-dollar checkout."
+        : finalLookup.message,
+    errorData:
+      finalLookup.ok &&
+      finalLookup.result ===
+        "AMBIGUOUS"
+        ? {
+          matches:
+            finalLookup.matches,
+        }
+        : {},
+  });
+
+  return NextResponse.json(
+    {
+      zeroPayment: true,
+      uncertain: true,
+      error:
+        "The booking needs verification before another attempt.",
+    },
+    {
+      status: 502,
+    }
+  );
+}
+
+type OpaqueData = {
+  dataDescriptor: string;
+  dataValue: string;
+};
+
+export async function POST(
+  request: NextRequest
+) {
+  const paymentRouteRequestId =
+    randomUUID();
+
+  let activeCheckoutId = "";
+
+  try {
+    const bookingV2Enabled =
+      process.env.BOOKING_V2_ENABLED
+        ? process.env.BOOKING_V2_ENABLED ===
+        "true"
+        : process.env.AUTHORIZE_ENVIRONMENT ===
+        "sandbox";
+
+    if (!bookingV2Enabled) {
+      return NextResponse.json(
+        {
+          error:
+            "This payment flow is not enabled.",
+        },
+        {
+          status: 404,
+        }
+      );
+    }
+
+    const {
+      loginId,
+      transactionKey,
+      apiUrl,
+      environment,
+    } = getAuthorizeGatewayConfig();
+
+    if (
+      !loginId ||
+      !transactionKey
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            `Authorize.Net ${environment} credentials are not configured.`,
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    const body =
+      await request.json();
+
+    const sessionId =
+      String(body.sessionId || "");
+
+    const opaqueData =
+      body.opaqueData as OpaqueData | undefined;
+
+    if (!isValidBookingSessionId(sessionId)) {
+      return NextResponse.json(
+        {
+          error:
+            "The booking session is invalid or expired.",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    let session =
+      await redis.get<BookingSession>(
+        `booking-session:${sessionId}`
+      );
+
+    logBookingEvent(
+      "payment.request_received",
+      {
+        sessionId,
+        checkoutId:
+          session?.checkoutId ?? null,
+        holdId:
+          session?.holdId ?? null,
+      }
+    );
+
+    if (!session) {
+      return NextResponse.json(
+        {
+          error:
+            "The booking session could not be found or has expired.",
+        },
+        {
+          status: 410,
+        }
+      );
+    }
+
+    /*
+     * Preserve a short-lived copy of the booking details
+     * for after-the-fact SMS. This helper is fail-open:
+     * notification bookkeeping can never block checkout.
+     */
+    await rememberBookingNotificationSource(
+      session
+    );
+
+    /*
+     * Own this checkout while the synchronous payment
+     * route is running. The watchdog will never mutate
+     * Bookeo or Authorize.Net until this owner releases.
+     */
+    const paymentRouteOwned =
+      await claimPaymentRouteOwnership(
+        session.checkoutId,
+        paymentRouteRequestId
+      );
+
+    if (!paymentRouteOwned) {
+      return NextResponse.json(
+        {
+          error:
+            "This payment attempt is already being processed.",
+          uncertain: true,
+        },
+        {
+          status: 409,
+        }
+      );
+    }
+
+    activeCheckoutId =
+      session.checkoutId;
+
+    if (
+      await isBookingWatchdogTakeoverRequested(
+        session.checkoutId
+      )
+    ) {
+      return watchdogTakeoverResponse();
+    }
+
+    /*
+     * STEP 15:
+     * Verify the current Bookeo hold before any
+     * Authorize.Net authorization is attempted.
+     */
+    const preAuthHoldResult =
+      await ensurePreAuthHold(session);
+
+    if (!preAuthHoldResult.ok) {
+      if (
+        preAuthHoldResult.reason ===
+        "UNAVAILABLE"
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Sorry, those seats are no longer available.",
+            unavailable: true,
+          },
+          {
+            status: 409,
+          }
+        );
+      }
+
+      return NextResponse.json(
+        {
+          error:
+            "Bookeo could not verify the booking hold. Please try again.",
+        },
+        {
+          status: 502,
+        }
+      );
+    }
+
+    session =
+      preAuthHoldResult.session;
+
+    logBookingEvent(
+      "hold.pre_auth_validated",
+      {
+        sessionId:
+          session.sessionId,
+        checkoutId:
+          session.checkoutId,
+        holdId:
+          session.holdId,
+        result:
+          preAuthHoldResult.replaced
+            ? "replaced"
+            : "valid",
+      }
+    );
+
+    /*
+     * STEP 17:
+     * Atomic server-side payment-attempt lock.
+     *
+     * Exactly one request can move this checkout
+     * from HOLD_CREATED to AUTHORIZING.
+     */
+    const claimedCheckout =
+      await claimCheckoutForAuthorization(
+        session.checkoutId
+      );
+
+    if (!claimedCheckout) {
+      return NextResponse.json(
+        {
+          error:
+            "This payment attempt has already been started.",
+        },
+        {
+          status: 409,
+        }
+      );
+    }
+
+    const amount =
+      Number(session.total);
+
+    if (
+      !Number.isFinite(amount) ||
+      amount < 0
+    ) {
+      await updateBookingLedgerRecord({
+        checkoutId:
+          session.checkoutId,
+        status:
+          BOOKING_STATES.FAILED,
+        errorCode:
+          "INVALID_AMOUNT",
+        errorMessage:
+          "Trusted booking amount was invalid.",
+      });
+
+      return NextResponse.json(
+        {
+          error:
+            "The booking total is invalid.",
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    /*
+     * A promotion or gift voucher can legitimately
+     * reduce the Bookeo totalPayable to exactly $0.
+     * In that case there is no card transaction:
+     * finalize Bookeo directly and skip Authorize.Net.
+     */
+    if (amount === 0) {
+      return completeZeroDollarCheckout(
+        session
+      );
+    }
+
+    if (
+      !opaqueData ||
+      opaqueData.dataDescriptor !==
+      "COMMON.ACCEPT.INAPP.PAYMENT" ||
+      !opaqueData.dataValue
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "The secure payment token is invalid.",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    /*
+     * STEP 18:
+     * AUTH-ONLY.
+     *
+     * No capture occurs here.
+     */
+    const authorizeRequest = {
+      createTransactionRequest: {
+        merchantAuthentication: {
+          name:
+            loginId,
+          transactionKey:
+            transactionKey,
+        },
+
+        refId:
+          session.checkoutId.slice(
+            0,
+            20
+          ),
+
+        transactionRequest: {
+          transactionType:
+            "authOnlyTransaction",
+
+          amount:
+            amount.toFixed(2),
+
+          payment: {
+            opaqueData: {
+              dataDescriptor:
+                opaqueData.dataDescriptor,
+              dataValue:
+                opaqueData.dataValue,
+            },
+          },
+
+          order: {
+            invoiceNumber:
+              session.checkoutId.slice(
+                0,
+                20
+              ),
+          },
+
+          customer: {
+            type: "individual",
+            email: session.email,
+          },
+
+          billTo: {
+            firstName: session.firstName,
+            lastName: session.lastName,
+          },
+        },
+      },
+    };
+
+    logBookingEvent(
+      "authorization.started",
+      {
+        sessionId:
+          session.sessionId,
+        checkoutId:
+          session.checkoutId,
+        holdId:
+          session.holdId,
+        previousStatus:
+          BOOKING_STATES.AUTHORIZING,
+      }
+    );
+
+    const authorizationInvoiceNumber =
+      session.checkoutId.slice(
+        0,
+        20
+      );
+
+    if (
+      await isBookingWatchdogTakeoverRequested(
+        session.checkoutId
+      )
+    ) {
+      return watchdogTakeoverResponse();
+    }
+
+    let authorizeResponse: Response;
+
+    try {
+      authorizeResponse =
+        await fetch(
+          apiUrl,
+          {
+            method: "POST",
+            cache: "no-store",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify(
+              authorizeRequest
+            ),
+            signal:
+              AbortSignal.timeout(
+                30_000
+              ),
+          }
+        );
+    } catch (error) {
+      await updateBookingLedgerRecord({
+        checkoutId:
+          session.checkoutId,
+        errorCode:
+          "AUTHORIZATION_RESULT_UNCERTAIN",
+        errorMessage:
+          "Authorize.Net may have received the AUTH-ONLY request, but no response was confirmed.",
+        errorData: {
+          invoiceNumber:
+            authorizationInvoiceNumber,
+          reason:
+            error instanceof Error
+              ? error.name
+              : "unknown",
+        },
+      });
+
+      return NextResponse.json(
+        {
+          error:
+            "Authorize.Net did not return a confirmed result.",
+          uncertain: true,
+        },
+        { status: 502 }
+      );
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let authorizeData: any = null;
+
+    try {
+      authorizeData =
+        await authorizeResponse.json();
+    } catch {
+      authorizeData = null;
+    }
+
+    const transactionResponse =
+      authorizeData?.transactionResponse;
+
+    const responseCode =
+      String(
+        transactionResponse?.responseCode ||
+        ""
+      );
+
+    const transactionId =
+      String(
+        transactionResponse?.transId ||
+        ""
+      ).trim();
+
+    const confirmedTransactionId =
+      transactionId && transactionId !== "0"
+        ? transactionId
+        : "";
+
+    const transactionMessage =
+      String(
+        transactionResponse?.messages?.[0]
+          ?.description ||
+        transactionResponse?.errors?.[0]
+          ?.errorText ||
+        authorizeData?.messages?.message?.[0]
+          ?.text ||
+        ""
+      );
+
+    if (!authorizeResponse.ok) {
+      await updateBookingLedgerRecord({
+        checkoutId:
+          session.checkoutId,
+        ...(confirmedTransactionId
+          ? {
+            authorizeTransactionId:
+              confirmedTransactionId,
+          }
+          : {}),
+        errorCode:
+          "AUTHORIZATION_RESULT_UNCERTAIN",
+        errorMessage:
+          "Authorize.Net returned a non-success HTTP result after AUTH-ONLY was sent.",
+        errorData: {
+          invoiceNumber:
+            authorizationInvoiceNumber,
+          httpStatus:
+            authorizeResponse.status,
+          authorizeTransactionId:
+            confirmedTransactionId || null,
+        },
+      });
+
+      return NextResponse.json(
+        {
+          error:
+            "Authorize.Net did not return a confirmed result.",
+          uncertain: true,
+        },
+        { status: 502 }
+      );
+    }
+
+    /*
+     * responseCode 1 = approved.
+     */
+    if (
+      responseCode === "1" &&
+      transactionId &&
+      transactionId !== "0"
+    ) {
+      logBookingEvent(
+        "authorization.approved",
+        {
+          sessionId:
+            session.sessionId,
+          checkoutId:
+            session.checkoutId,
+          holdId:
+            session.holdId,
+          authorizeTransactionId:
+            transactionId,
+          result: "approved",
+        }
+      );
+
+      await updateBookingLedgerRecord({
+        checkoutId:
+          session.checkoutId,
+        authorizeTransactionId:
+          transactionId,
+        status:
+          BOOKING_STATES.AUTHORIZED,
+      });
+
+      if (
+        await isBookingWatchdogTakeoverRequested(
+          session.checkoutId
+        )
+      ) {
+        return watchdogTakeoverResponse();
+      }
+
+      /*
+       * STEP 19:
+       * Authorization succeeded.
+       *
+       * Check the Bookeo hold again before
+       * attempting final Bookeo creation.
+       */
+      const postAuthHoldResult =
+        await ensurePreAuthHold(
+          session
+        );
+
+      if (!postAuthHoldResult.ok) {
+        /*
+         * Bookeo explicitly says the seats
+         * are no longer available.
+         *
+         * The authorization must be voided.
+         */
+        if (
+          postAuthHoldResult.reason ===
+          "UNAVAILABLE"
+        ) {
+          if (
+            await isBookingWatchdogTakeoverRequested(
+              session.checkoutId
+            )
+          ) {
+            return watchdogTakeoverResponse();
+          }
+
+          const voidResult =
+            await voidAuthorizeAuthorization(
+              transactionId
+            );
+
+          if (voidResult.ok) {
+            await updateBookingLedgerRecord({
+              checkoutId:
+                session.checkoutId,
+              status:
+                BOOKING_STATES.VOIDED,
+              errorCode:
+                "POST_AUTH_HOLD_UNAVAILABLE",
+              errorMessage:
+                "Bookeo seats became unavailable after authorization.",
+            });
+
+            return NextResponse.json(
+              {
+                authorized: false,
+                voided: true,
+                unavailable: true,
+                error:
+                  "Sorry, those seats are no longer available. The card authorization was voided.",
+              },
+              {
+                status: 409,
+              }
+            );
+          }
+
+          /*
+           * We know the seats are unavailable,
+           * but we could not confirm the void.
+           *
+           * Keep the ledger AUTHORIZED so
+           * recovery can deal with the real
+           * gateway state.
+           */
+          await updateBookingLedgerRecord({
+            checkoutId:
+              session.checkoutId,
+            errorCode:
+              "POST_AUTH_VOID_NOT_CONFIRMED",
+            errorMessage:
+              voidResult.message,
+            errorData: {
+              authorizeTransactionId:
+                transactionId,
+              uncertain:
+                voidResult.uncertain,
+            },
+          });
+
+          return NextResponse.json(
+            {
+              authorized: true,
+              recoveryRequired: true,
+              error:
+                "The seats are no longer available, and the payment authorization requires recovery.",
+            },
+            {
+              status: 502,
+            }
+          );
+        }
+
+        /*
+         * Bookeo did not give us a definitive
+         * availability result.
+         *
+         * Do NOT void and do NOT authorize again.
+         * Preserve AUTHORIZED for recovery.
+         */
+        await updateBookingLedgerRecord({
+          checkoutId:
+            session.checkoutId,
+          errorCode:
+            "POST_AUTH_BOOKEO_ERROR",
+          errorMessage:
+            "Bookeo could not confirm the hold after authorization.",
+          errorData: {
+            authorizeTransactionId:
+              transactionId,
+          },
+        });
+
+        return NextResponse.json(
+          {
+            authorized: true,
+            recoveryRequired: true,
+            error:
+              "The card was authorized, but the booking hold could not be confirmed.",
+          },
+          {
+            status: 502,
+          }
+        );
+      }
+
+      /*
+       * The hold is valid, or a replacement
+       * hold was successfully created.
+       */
+      session =
+        postAuthHoldResult.session;
+
+      logBookingEvent(
+        "hold.post_auth_validated",
+        {
+          sessionId:
+            session.sessionId,
+          checkoutId:
+            session.checkoutId,
+          holdId:
+            session.holdId,
+          authorizeTransactionId:
+            transactionId,
+          result:
+            postAuthHoldResult.replaced
+              ? "replaced"
+              : "valid",
+        }
+      );
+
+      if (
+        await isBookingWatchdogTakeoverRequested(
+          session.checkoutId
+        )
+      ) {
+        return watchdogTakeoverResponse();
+      }
+
+      /*
+       * STEP 20:
+       * Create the final Bookeo booking from
+       * the current validated hold.
+       *
+       * Payment is still AUTH-ONLY here.
+       * Capture happens later.
+       */
+      const finalBookeoResult =
+        await createFinalBookeoBooking(
+          session,
+          transactionId
+        );
+
+      if (!finalBookeoResult.ok) {
+        /*
+         * A definite Bookeo rejection means
+         * no booking was created.
+         *
+         * Void the card authorization.
+         */
+        if (
+          finalBookeoResult.reason ===
+          "REJECTED"
+        ) {
+          if (
+            await isBookingWatchdogTakeoverRequested(
+              session.checkoutId
+            )
+          ) {
+            return watchdogTakeoverResponse();
+          }
+
+          const voidResult =
+            await voidAuthorizeAuthorization(
+              transactionId
+            );
+
+          if (voidResult.ok) {
+            await updateBookingLedgerRecord({
+              checkoutId:
+                session.checkoutId,
+
+              status:
+                BOOKING_STATES.VOIDED,
+
+              errorCode:
+                "BOOKEO_FINALIZE_REJECTED",
+
+              errorMessage:
+                finalBookeoResult.message,
+
+              errorData: {
+                bookeoStatus:
+                  finalBookeoResult.status,
+
+                bookeoData:
+                  finalBookeoResult.data,
+              },
+            });
+
+            return NextResponse.json(
+              {
+                authorized: false,
+                voided: true,
+
+                error:
+                  "Bookeo could not create the booking. The card authorization was voided.",
+              },
+              {
+                status: 502,
+              }
+            );
+          }
+
+          /*
+           * Bookeo definitely rejected,
+           * but the void was not confirmed.
+           *
+           * Preserve AUTHORIZED for recovery.
+           */
+          await updateBookingLedgerRecord({
+            checkoutId:
+              session.checkoutId,
+
+            errorCode:
+              "BOOKEO_REJECTED_VOID_NOT_CONFIRMED",
+
+            errorMessage:
+              voidResult.message,
+
+            errorData: {
+              authorizeTransactionId:
+                transactionId,
+
+              bookeoStatus:
+                finalBookeoResult.status,
+
+              voidUncertain:
+                voidResult.uncertain,
+            },
+          });
+
+          return NextResponse.json(
+            {
+              authorized: true,
+              recoveryRequired: true,
+
+              error:
+                "Bookeo rejected the booking, and the authorization void requires recovery.",
+            },
+            {
+              status: 502,
+            }
+          );
+        }
+
+        /*
+         * Timeout, 5xx, network failure,
+         * or success without bookingNumber.
+         *
+         * Do NOT send another Bookeo CREATE.
+         * Step 21 will perform booking lookup.
+         */
+        /*
+ * STEP 21:
+ * The CREATE result was uncertain.
+ *
+ * Verify whether Bookeo actually created
+ * the booking before allowing any
+ * additional CREATE attempt.
+ */
+if (
+          await isBookingWatchdogTakeoverRequested(
+            session.checkoutId
+          )
+        ) {
+          return watchdogTakeoverResponse();
+        }
+
+        for (
+          let lookupAttempt = 1;
+          lookupAttempt <= 3;
+          lookupAttempt++
+        ) {
+          if (
+            await isBookingWatchdogTakeoverRequested(
+              session.checkoutId
+            )
+          ) {
+            return watchdogTakeoverResponse();
+          }
+
+          if (lookupAttempt > 1) {
+            await new Promise(
+              (resolve) =>
+                setTimeout(
+                  resolve,
+                  lookupAttempt === 2
+                    ? 1000
+                    : 2000
+                )
+            );
+          }
+
+          const lookupResult =
+            await lookupFinalBookeoBooking(
+              session
+            );
+
+          /*
+           * Exactly one booking carrying our
+           * unique checkout externalRef exists.
+           */
+          if (
+            lookupResult.ok &&
+            lookupResult.result ===
+            "FOUND"
+          ) {
+            await updateBookingLedgerRecord({
+              checkoutId:
+                session.checkoutId,
+
+              bookeoBookingId:
+                lookupResult.bookingId,
+
+              status:
+                BOOKING_STATES.BOOKED,
+            });
+
+            if (
+              await isBookingWatchdogTakeoverRequested(
+                session.checkoutId
+              )
+            ) {
+              return watchdogTakeoverResponse();
+            }
+
+            return captureBookedCheckout({
+              checkoutId:
+                session.checkoutId,
+
+              transactionId,
+
+              amount,
+
+              bookeoBookingId:
+                lookupResult.bookingId,
+
+              responseData: {
+                recoveredByLookup:
+                  true,
+              },
+            });
+          }
+
+          /*
+           * More than one booking with the same
+           * unique checkout ID should never occur.
+           *
+           * Stop automation.
+           */
+          if (
+            lookupResult.ok &&
+            lookupResult.result ===
+            "AMBIGUOUS"
+          ) {
+            await updateBookingLedgerRecord({
+              checkoutId:
+                session.checkoutId,
+
+              errorCode:
+                "BOOKEO_LOOKUP_MULTIPLE_MATCHES",
+
+              errorMessage:
+                "Multiple Bookeo bookings matched the same checkout ID.",
+
+              errorData: {
+                authorizeTransactionId:
+                  transactionId,
+
+                checkoutId:
+                  session.checkoutId,
+
+                matches:
+                  lookupResult.matches,
+              },
+            });
+
+            return NextResponse.json(
+              {
+                authorized: true,
+
+                recoveryRequired:
+                  true,
+
+                error:
+                  "Multiple Bookeo bookings matched this checkout. Automatic recovery stopped.",
+              },
+              {
+                status: 409,
+              }
+            );
+          }
+
+          /*
+           * Lookup itself failed.
+           *
+           * Do not interpret that as zero
+           * bookings and do not CREATE again.
+           */
+          if (!lookupResult.ok) {
+await updateBookingLedgerRecord({
+              checkoutId:
+                session.checkoutId,
+
+              errorCode:
+                "BOOKEO_LOOKUP_FAILED",
+
+              errorMessage:
+                lookupResult.message,
+
+              errorData: {
+                authorizeTransactionId:
+                  transactionId,
+
+                checkoutId:
+                  session.checkoutId,
+
+                lookupAttempt,
+              },
+            });
+
+            return NextResponse.json(
+              {
+                authorized: true,
+
+                recoveryRequired:
+                  true,
+
+                error:
+                  "Bookeo booking verification could not be completed.",
+              },
+              {
+                status: 502,
+              }
+            );
+          }
+
+          /*
+           * NO_MATCH:
+           * try again unless this was the
+           * third and final lookup.
+           */
+        }
+
+        /*
+  * STEP 22:
+  *
+  * Three successful lookups found zero
+  * Bookeo bookings.
+  *
+  * Before allowing exactly one controlled
+  * second CREATE, verify that we still
+  * have a valid Bookeo hold.
+  */
+        const retryHoldResult =
+          await ensurePreAuthHold(
+            session
+          );
+
+        if (!retryHoldResult.ok) {
+          /*
+           * We cannot safely issue the second
+           * CREATE without a confirmed hold.
+           */
+          if (
+            retryHoldResult.reason ===
+            "UNAVAILABLE"
+          ) {
+            if (
+              await isBookingWatchdogTakeoverRequested(
+                session.checkoutId
+              )
+            ) {
+              return watchdogTakeoverResponse();
+            }
+
+            const voidResult =
+              await voidAuthorizeAuthorization(
+                transactionId
+              );
+
+            if (voidResult.ok) {
+              await updateBookingLedgerRecord({
+                checkoutId:
+                  session.checkoutId,
+
+                status:
+                  BOOKING_STATES.VOIDED,
+
+                errorCode:
+                  "SECOND_CREATE_HOLD_UNAVAILABLE",
+
+                errorMessage:
+                  "No Bookeo booking was found and the hold could not be restored before the controlled second CREATE.",
+              });
+
+              return NextResponse.json(
+                {
+                  authorized: false,
+                  voided: true,
+                  unavailable: true,
+
+                  error:
+                    "The booking could not be confirmed and the card authorization was voided.",
+                },
+                {
+                  status: 409,
+                }
+              );
+            }
+
+            await updateBookingLedgerRecord({
+              checkoutId:
+                session.checkoutId,
+
+              errorCode:
+                "SECOND_CREATE_HOLD_VOID_NOT_CONFIRMED",
+
+              errorMessage:
+                voidResult.message,
+
+              errorData: {
+                authorizeTransactionId:
+                  transactionId,
+
+                uncertain:
+                  voidResult.uncertain,
+              },
+            });
+
+            return NextResponse.json(
+              {
+                authorized: true,
+                recoveryRequired: true,
+
+                error:
+                  "The booking could not be confirmed and the authorization void requires recovery.",
+              },
+              {
+                status: 502,
+              }
+            );
+          }
+
+          await updateBookingLedgerRecord({
+            checkoutId:
+              session.checkoutId,
+
+            errorCode:
+              "SECOND_CREATE_HOLD_CHECK_FAILED",
+
+            errorMessage:
+              "Bookeo could not confirm a valid hold before the controlled second CREATE.",
+          });
+
+          return NextResponse.json(
+            {
+              authorized: true,
+              recoveryRequired: true,
+
+              error:
+                "Bookeo could not safely verify the hold before recovery.",
+            },
+            {
+              status: 502,
+            }
+          );
+        }
+
+        session =
+          retryHoldResult.session;
+
+        if (
+          await isBookingWatchdogTakeoverRequested(
+            session.checkoutId
+          )
+        ) {
+          return watchdogTakeoverResponse();
+        }
+
+        /*
+         * Exactly ONE controlled second CREATE.
+         *
+         * There is no code path below this point
+         * that performs a third CREATE.
+         */
+        const secondCreateResult =
+          await createFinalBookeoBooking(
+            session,
+            transactionId
+          );
+
+        /*
+         * Second CREATE positively succeeded.
+         */
+        if (secondCreateResult.ok) {
+          await updateBookingLedgerRecord({
+            checkoutId:
+              session.checkoutId,
+
+            bookeoBookingId:
+              secondCreateResult.bookingId,
+
+            status:
+              BOOKING_STATES.BOOKED,
+
+            errorCode:
+              null,
+
+            errorMessage:
+              null,
+          });
+
+          if (
+            await isBookingWatchdogTakeoverRequested(
+              session.checkoutId
+            )
+          ) {
+            return watchdogTakeoverResponse();
+          }
+
+          return captureBookedCheckout({
+            checkoutId:
+              session.checkoutId,
+
+            transactionId,
+
+            amount,
+
+            bookeoBookingId:
+              secondCreateResult.bookingId,
+
+            responseData: {
+              recoveredBySecondCreate:
+                true,
+            },
+          });
+        }
+
+        /*
+         * Second CREATE was explicitly rejected.
+         * No booking was created, so void.
+         */
+        if (
+          secondCreateResult.reason ===
+          "REJECTED"
+        ) {
+          if (
+            await isBookingWatchdogTakeoverRequested(
+              session.checkoutId
+            )
+          ) {
+            return watchdogTakeoverResponse();
+          }
+
+          const voidResult =
+            await voidAuthorizeAuthorization(
+              transactionId
+            );
+
+          if (voidResult.ok) {
+            await updateBookingLedgerRecord({
+              checkoutId:
+                session.checkoutId,
+
+              status:
+                BOOKING_STATES.VOIDED,
+
+              errorCode:
+                "SECOND_CREATE_REJECTED",
+
+              errorMessage:
+                secondCreateResult.message,
+
+              errorData: {
+                bookeoStatus:
+                  secondCreateResult.status,
+
+                bookeoData:
+                  secondCreateResult.data,
+              },
+            });
+
+            return NextResponse.json(
+              {
+                authorized: false,
+                voided: true,
+
+                error:
+                  "Bookeo rejected the recovery booking and the card authorization was voided.",
+              },
+              {
+                status: 502,
+              }
+            );
+          }
+
+          await updateBookingLedgerRecord({
+            checkoutId:
+              session.checkoutId,
+
+            errorCode:
+              "SECOND_CREATE_REJECTED_VOID_NOT_CONFIRMED",
+
+            errorMessage:
+              voidResult.message,
+          });
+
+          return NextResponse.json(
+            {
+              authorized: true,
+              recoveryRequired: true,
+
+              error:
+                "Bookeo rejected the recovery booking and the authorization void requires recovery.",
+            },
+            {
+              status: 502,
+            }
+          );
+        }
+
+        /*
+         * The second CREATE result itself was
+         * uncertain.
+         *
+         * Perform ONE final lookup.
+         */
+        const finalLookup =
+          await lookupFinalBookeoBooking(
+            session
+          );
+
+        if (
+          finalLookup.ok &&
+          finalLookup.result ===
+          "FOUND"
+        ) {
+          await updateBookingLedgerRecord({
+            checkoutId:
+              session.checkoutId,
+
+            bookeoBookingId:
+              finalLookup.bookingId,
+
+            status:
+              BOOKING_STATES.BOOKED,
+
+            errorCode:
+              null,
+
+            errorMessage:
+              null,
+          });
+
+          if (
+            await isBookingWatchdogTakeoverRequested(
+              session.checkoutId
+            )
+          ) {
+            return watchdogTakeoverResponse();
+          }
+
+          return captureBookedCheckout({
+            checkoutId:
+              session.checkoutId,
+
+            transactionId,
+
+            amount,
+
+            bookeoBookingId:
+              finalLookup.bookingId,
+
+            responseData: {
+              recoveredByFinalLookup:
+                true,
+            },
+          });
+        }
+
+        /*
+         * Multiple bookings with our unique
+         * checkout ID means automation stops.
+         */
+        if (
+          finalLookup.ok &&
+          finalLookup.result ===
+          "AMBIGUOUS"
+        ) {
+          await updateBookingLedgerRecord({
+            checkoutId:
+              session.checkoutId,
+
+            errorCode:
+              "FINAL_LOOKUP_MULTIPLE_MATCHES",
+
+            errorMessage:
+              "Multiple Bookeo bookings matched the checkout after the controlled second CREATE.",
+
+            errorData: {
+              authorizeTransactionId:
+                transactionId,
+
+              matches:
+                finalLookup.matches,
+            },
+          });
+
+          return NextResponse.json(
+            {
+              authorized: true,
+              recoveryRequired: true,
+
+              error:
+                "Multiple Bookeo bookings matched this checkout. Automatic recovery stopped.",
+            },
+            {
+              status: 409,
+            }
+          );
+        }
+
+        /*
+         * If the final lookup itself failed,
+         * preserve AUTHORIZED for manual recovery.
+         * We do not pretend this means no booking.
+         */
+        if (!finalLookup.ok) {
+          await updateBookingLedgerRecord({
+            checkoutId:
+              session.checkoutId,
+
+            errorCode:
+              "FINAL_LOOKUP_FAILED",
+
+            errorMessage:
+              finalLookup.message,
+          });
+
+          return NextResponse.json(
+            {
+              authorized: true,
+              recoveryRequired: true,
+
+              error:
+                "The final Bookeo verification could not be completed.",
+            },
+            {
+              status: 502,
+            }
+          );
+        }
+
+        /*
+         * Final lookup positively completed and
+         * found zero bookings.
+         *
+         * Both allowed CREATE attempts are now
+         * exhausted. Void the authorization.
+         */
+        if (
+          await isBookingWatchdogTakeoverRequested(
+            session.checkoutId
+          )
+        ) {
+          return watchdogTakeoverResponse();
+        }
+
+        const finalVoidResult =
+          await voidAuthorizeAuthorization(
+            transactionId
+          );
+
+        if (finalVoidResult.ok) {
+          await updateBookingLedgerRecord({
+            checkoutId:
+              session.checkoutId,
+
+            status:
+              BOOKING_STATES.VOIDED,
+
+            errorCode:
+              "SECOND_CREATE_FINAL_NO_MATCH",
+
+            errorMessage:
+              "Two Bookeo CREATE attempts were exhausted and the final verification found no booking.",
+          });
+
+          return NextResponse.json(
+            {
+              authorized: false,
+              voided: true,
+
+              error:
+                "The booking could not be confirmed and the card authorization was voided.",
+            },
+            {
+              status: 502,
+            }
+          );
+        }
+
+        await updateBookingLedgerRecord({
+          checkoutId:
+            session.checkoutId,
+
+          errorCode:
+            "FINAL_NO_MATCH_VOID_NOT_CONFIRMED",
+
+          errorMessage:
+            finalVoidResult.message,
+
+          errorData: {
+            authorizeTransactionId:
+              transactionId,
+
+            uncertain:
+              finalVoidResult.uncertain,
+          },
+        });
+
+        return NextResponse.json(
+          {
+            authorized: true,
+            recoveryRequired: true,
+
+            error:
+              "No Bookeo booking was confirmed, and the authorization void requires recovery.",
+          },
+          {
+            status: 502,
+          }
+        );
+      }
+
+      /*
+       * Bookeo positively confirmed the
+       * booking and returned bookingNumber.
+       */
+      await updateBookingLedgerRecord({
+        checkoutId:
+          session.checkoutId,
+
+        bookeoBookingId:
+          finalBookeoResult.bookingId,
+
+        status:
+          BOOKING_STATES.BOOKED,
+      });
+
+      if (
+        await isBookingWatchdogTakeoverRequested(
+          session.checkoutId
+        )
+      ) {
+        return watchdogTakeoverResponse();
+      }
+
+      return captureBookedCheckout({
+        checkoutId:
+          session.checkoutId,
+
+        transactionId,
+
+        amount,
+
+        bookeoBookingId:
+          finalBookeoResult.bookingId,
+
+        responseData: {
+          postAuthHoldValid:
+            true,
+
+          holdReplaced:
+            postAuthHoldResult.replaced,
+        },
+      });
+    }
+
+    /*
+     * responseCode 2 or 3 is an explicit
+     * decline/error result from Authorize.Net.
+     *
+     * No Bookeo booking is created.
+     */
+    if (
+      responseCode === "2" ||
+      responseCode === "3"
+    ) {
+      logBookingEvent(
+        "authorization.declined",
+        {
+          sessionId:
+            session.sessionId,
+          checkoutId:
+            session.checkoutId,
+          holdId:
+            session.holdId,
+          authorizeTransactionId:
+            transactionId || null,
+          result:
+            responseCode,
+          errorCode:
+            `AUTHORIZE_${responseCode}`,
+        },
+        "warn"
+      );
+
+      await updateBookingLedgerRecord({
+        checkoutId:
+          session.checkoutId,
+        status:
+          BOOKING_STATES.HOLD_CREATED,
+        errorCode:
+          `AUTHORIZE_${responseCode}`,
+        errorMessage:
+          transactionMessage ||
+          "Authorize.Net declined the authorization.",
+        errorData: {
+          responseCode,
+          retryable: true,
+        },
+      });
+
+      return NextResponse.json(
+        {
+          authorized: false,
+          declined: true,
+          error:
+            transactionMessage ||
+            "The card was declined.",
+        },
+        {
+          status: 402,
+        }
+      );
+    }
+
+    /*
+     * Anything else is ambiguous.
+     * Leave the ledger AUTHORIZING so we do not
+     * accidentally send another authorization.
+     * Persist any transaction ID Authorize.Net did
+     * return so delayed reconciliation can own it.
+     */
+    await updateBookingLedgerRecord({
+      checkoutId:
+        session.checkoutId,
+      ...(confirmedTransactionId
+        ? {
+          authorizeTransactionId:
+            confirmedTransactionId,
+        }
+        : {}),
+      errorCode:
+        "AUTHORIZATION_RESULT_UNCERTAIN",
+      errorMessage:
+        transactionMessage ||
+        "Authorize.Net returned an ambiguous authorization result.",
+      errorData: {
+        invoiceNumber:
+          authorizationInvoiceNumber,
+        responseCode:
+          responseCode || null,
+        authorizeTransactionId:
+          confirmedTransactionId || null,
+      },
+    });
+
+    return NextResponse.json(
+      {
+        error:
+          "Authorize.Net did not return a confirmed authorization result.",
+        uncertain: true,
+      },
+      { status: 502 }
+    );
+  } catch (error) {
+    console.error(
+      "Authorize.Net AUTH-ONLY failed.",
+      error
+    );
+
+    return NextResponse.json(
+      {
+        error:
+          "We could not confirm the payment authorization.",
+        uncertain: true,
+      },
+      {
+        status: 502,
+      }
+    );
+  } finally {
+    if (activeCheckoutId) {
+      try {
+        await releasePaymentRouteOwnership(
+          activeCheckoutId,
+          paymentRouteRequestId
+        );
+      } catch (error) {
+        console.error(
+          "Could not release payment route ownership.",
+          error
+        );
+      }
+    }
+  }
+}
+

@@ -45,22 +45,30 @@ export type DayMatrix = Record<
 export const RECIPIENTS = {
   noel: {
     label: "Noel - KOP Site Manager",
-    phone: "+14849427519",
+    phone:
+      process.env.NOTIFICATION_NOEL_PHONE ||
+      "+14849427519",
     manager: true,
   },
   david: {
     label: "David - Cherry Hill Site Manager",
-    phone: "+18565346794",
+    phone:
+      process.env.NOTIFICATION_DAVID_PHONE ||
+      "+18565346794",
     manager: true,
   },
   kopTracfone: {
     label: "King of Prussia Tracfone",
-    phone: "+12672200934",
+    phone:
+      process.env.NOTIFICATION_KOP_TRACFONE_PHONE ||
+      "+12672200934",
     manager: false,
   },
   chTracfone: {
     label: "Cherry Hill Tracfone",
-    phone: "+12672803946",
+    phone:
+      process.env.NOTIFICATION_CH_TRACFONE_PHONE ||
+      "+12672803946",
     manager: false,
   },
 } as const;
@@ -69,13 +77,13 @@ export const STORE_HOURS: Record<
   DayKey,
   { start: string; end: string }
 > = {
-  sun: { start: "13:00", end: "19:00" },
-  mon: { start: "12:00", end: "21:00" },
-  tue: { start: "12:00", end: "21:00" },
-  wed: { start: "12:00", end: "21:00" },
-  thu: { start: "12:00", end: "21:00" },
+  sun: { start: "13:00", end: "20:00" },
+  mon: { start: "12:00", end: "22:30" },
+  tue: { start: "12:00", end: "22:30" },
+  wed: { start: "12:00", end: "22:30" },
+  thu: { start: "12:00", end: "22:30" },
   fri: { start: "12:00", end: "22:30" },
-  sat: { start: "10:30", end: "22:45" },
+  sat: { start: "10:30", end: "23:45" },
 };
 
 export const DEFAULT_DAY_MATRIX: DayMatrix = {
