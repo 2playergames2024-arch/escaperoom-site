@@ -231,14 +231,21 @@ export async function createFinalBookeoBooking(
       );
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let data: any = null;
+    const data: any = null;
 
-    try {
-      data =
-        await response.json();
-    } catch {
-      data = null;
-    }
+    console.error(
+      "BOOKEO_FINAL_CREATE_RESPONSE",
+      JSON.stringify(
+        {
+          location: session.location,
+          status: response.status,
+          ok: response.ok,
+          data,
+        },
+        null,
+        2
+      )
+    );
 
     /*
      * A 4xx response does NOT prove that no booking
