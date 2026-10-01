@@ -25,7 +25,7 @@ export default function PrivacyPolicyPage() {
             ["Information Sharing", "We do not sell personal information. Information may be shared with trusted third-party service providers when necessary to process reservations, process payments, operate our website, provide customer support, or perform analytics and advertising services."],
             [
               "Mobile Information and Text Messaging",
-              "No mobile information will be shared with third parties/affiliates for marketing/promotional purposes. All OPT-IN requests include text messaging originator opt-in data and consent; this information will not be shared with third parties.",
+              "We do not sell or share your SMS opt-in data or personal information with third parties for marketing purposes. No mobile information will be shared with third parties or affiliates for marketing or promotional purposes. SMS opt-in data and consent will not be shared with third parties."
             ],
             ["Data Retention", "We retain information only as long as reasonably necessary for business operations, legal compliance, dispute resolution, and recordkeeping purposes."],
             ["Data Security", "We take reasonable administrative, technical, and physical measures to help protect personal information. However, no method of electronic transmission or storage can be guaranteed to be completely secure."],
@@ -43,27 +43,27 @@ export default function PrivacyPolicyPage() {
             <h2 className="mb-2 text-2xl font-black">Contact Information</h2>
 
             <p className="mb-4">
-                Questions regarding this Privacy Policy may be directed to:
+              Questions regarding this Privacy Policy may be directed to:
             </p>
 
             <div className="space-y-4">
-                <div>
+              <div>
                 <div className="font-black">Escape Room Mystery - King of Prussia</div>
                 <div>840 First Avenue, Suite 500</div>
                 <div>King of Prussia, PA 19406</div>
-                </div>
+              </div>
 
-                <div>
+              <div>
                 <div className="font-black">Escape Room Mystery - Cherry Hill</div>
                 <div>1200 Haddonfield Road, 2nd Floor</div>
                 <div>Cherry Hill, NJ 08002</div>
-                </div>
+              </div>
 
-                <div className="font-black">
+              <div className="font-black">
                 Phone: 610-757-1053
-                </div>
+              </div>
             </div>
-            </section>
+          </section>
         </div>
       </main>
 
