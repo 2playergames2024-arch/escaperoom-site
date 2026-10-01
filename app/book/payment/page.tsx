@@ -207,7 +207,7 @@ function PaymentPageContent() {
 
         if (
           data.status ===
-            "confirmed" &&
+          "confirmed" &&
           data.bookingId
         ) {
           paymentResolvedRef.current =
@@ -244,7 +244,7 @@ function PaymentPageContent() {
             message:
               "We could not complete your booking. Please try again or try another card.",
             instruction:
-            "Close this message, then use Change Room, Date, or Time below to start again.",
+              "Close this message, then use Change Room, Date, or Time below to start again.",
           });
 
           setIsPaying(false);
@@ -432,8 +432,34 @@ function PaymentPageContent() {
         );
       }
 
+      const results = Array.isArray(data.results)
+        ? data.results
+        : [];
+
+      const lines = results.map(
+        (result: {
+          label?: string;
+          status?: string;
+          reason?: string;
+        }) =>
+          `${result.label || "Unknown"}: ${String(
+            result.status || "unknown"
+          ).toUpperCase()} — ${result.reason || "no reason returned"
+          }`
+      );
+
+      if (data.error) {
+        lines.push(
+          `SYSTEM: ${data.error}`
+        );
+      }
+
+      lines.push(
+        "No Bookeo booking or Authorize.Net transaction was created."
+      );
+
       setNotificationTestMessage(
-        "Test notifications triggered. No Bookeo booking or Authorize.Net transaction was created."
+        lines.join("\n")
       );
     } catch (err) {
       setNotificationTestMessage(
@@ -606,19 +632,19 @@ function PaymentPageContent() {
 
       const apiLoginID =
         authorizeEnvironment ===
-        "production"
+          "production"
           ? process.env
-              .NEXT_PUBLIC_AUTHORIZE_LOGIN_ID
+            .NEXT_PUBLIC_AUTHORIZE_LOGIN_ID
           : process.env
-              .NEXT_PUBLIC_AUTHORIZE_SANDBOX_LOGIN_ID;
+            .NEXT_PUBLIC_AUTHORIZE_SANDBOX_LOGIN_ID;
 
       const clientKey =
         authorizeEnvironment ===
-        "production"
+          "production"
           ? process.env
-              .NEXT_PUBLIC_AUTHORIZE_CLIENT_KEY
+            .NEXT_PUBLIC_AUTHORIZE_CLIENT_KEY
           : process.env
-              .NEXT_PUBLIC_AUTHORIZE_SANDBOX_CLIENT_KEY;
+            .NEXT_PUBLIC_AUTHORIZE_SANDBOX_CLIENT_KEY;
 
       if (!apiLoginID || !clientKey) {
         throw new Error(
@@ -813,7 +839,7 @@ function PaymentPageContent() {
           authorizationData.error ||
           "We could not complete your booking.",
         instruction:
-            "Close this message, then use Change Room, Date, or Time below to start again.",
+          "Close this message, then use Change Room, Date, or Time below to start again.",
       });
     } catch (err) {
       if (authorizationStarted) {
@@ -1174,98 +1200,98 @@ function PaymentPageContent() {
           {finalTotal > 0 && (
             <div className="mt-4 grid gap-3">
               <div>
-              <label
-                htmlFor="cardNumber"
-                className="mb-1 block font-black"
-              >
-                Card Number
-              </label>
-
-              <input
-                id="cardNumber"
-                type="text"
-                inputMode="numeric"
-                autoComplete="cc-number"
-                value={cardNumber}
-                onChange={(event) =>
-                  setCardNumber(event.target.value)
-                }
-                className="w-full rounded border-2 border-slate-300 px-4 py-2.5"
-                placeholder="1234 5678 9012 3456"
-              />
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <div>
                 <label
-                  htmlFor="expirationMonth"
+                  htmlFor="cardNumber"
                   className="mb-1 block font-black"
                 >
-                  Month
+                  Card Number
                 </label>
 
                 <input
-                  id="expirationMonth"
+                  id="cardNumber"
                   type="text"
                   inputMode="numeric"
-                  autoComplete="cc-exp-month"
-                  value={expirationMonth}
+                  autoComplete="cc-number"
+                  value={cardNumber}
                   onChange={(event) =>
-                    setExpirationMonth(
-                      event.target.value
-                    )
+                    setCardNumber(event.target.value)
                   }
                   className="w-full rounded border-2 border-slate-300 px-4 py-2.5"
-                  placeholder="MM"
+                  placeholder="1234 5678 9012 3456"
                 />
               </div>
 
-              <div>
-                <label
-                  htmlFor="expirationYear"
-                  className="mb-1 block font-black"
-                >
-                  Year
-                </label>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label
+                    htmlFor="expirationMonth"
+                    className="mb-1 block font-black"
+                  >
+                    Month
+                  </label>
 
-                <input
-                  id="expirationYear"
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="cc-exp-year"
-                  value={expirationYear}
-                  onChange={(event) =>
-                    setExpirationYear(
-                      event.target.value
-                    )
-                  }
-                  className="w-full rounded border-2 border-slate-300 px-4 py-2.5"
-                  placeholder="YY"
-                />
+                  <input
+                    id="expirationMonth"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="cc-exp-month"
+                    value={expirationMonth}
+                    onChange={(event) =>
+                      setExpirationMonth(
+                        event.target.value
+                      )
+                    }
+                    className="w-full rounded border-2 border-slate-300 px-4 py-2.5"
+                    placeholder="MM"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="expirationYear"
+                    className="mb-1 block font-black"
+                  >
+                    Year
+                  </label>
+
+                  <input
+                    id="expirationYear"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="cc-exp-year"
+                    value={expirationYear}
+                    onChange={(event) =>
+                      setExpirationYear(
+                        event.target.value
+                      )
+                    }
+                    className="w-full rounded border-2 border-slate-300 px-4 py-2.5"
+                    placeholder="YY"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="cardCode"
+                    className="mb-1 block font-black"
+                  >
+                    CVV
+                  </label>
+
+                  <input
+                    id="cardCode"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="cc-csc"
+                    value={cardCode}
+                    onChange={(event) =>
+                      setCardCode(event.target.value)
+                    }
+                    className="w-full rounded border-2 border-slate-300 px-4 py-2.5"
+                    placeholder="123"
+                  />
+                </div>
               </div>
-
-              <div>
-                <label
-                  htmlFor="cardCode"
-                  className="mb-1 block font-black"
-                >
-                  CVV
-                </label>
-
-                <input
-                  id="cardCode"
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="cc-csc"
-                  value={cardCode}
-                  onChange={(event) =>
-                    setCardCode(event.target.value)
-                  }
-                  className="w-full rounded border-2 border-slate-300 px-4 py-2.5"
-                  placeholder="123"
-                />
-              </div>
-            </div>
             </div>
           )}
 
@@ -1294,7 +1320,7 @@ function PaymentPageContent() {
               </button>
 
               {notificationTestMessage ? (
-                <p className="mt-2 text-sm font-bold text-blue-900">
+                <p className="mt-2 whitespace-pre-line text-sm font-bold text-blue-900">
                   {notificationTestMessage}
                 </p>
               ) : null}

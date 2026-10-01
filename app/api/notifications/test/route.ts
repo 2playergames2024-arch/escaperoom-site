@@ -101,14 +101,16 @@ export async function POST(request: Request) {
       testSession
     );
 
-    await triggerCompletedBookingNotifications({
-      checkoutId: testCheckoutId,
-      holdId: null,
-    });
+    const notificationResult =
+      await triggerCompletedBookingNotifications({
+        checkoutId: testCheckoutId,
+        holdId: null,
+      });
 
     return NextResponse.json({
       ok: true,
       test: true,
+      ...notificationResult,
     });
   } catch (error) {
     console.error(

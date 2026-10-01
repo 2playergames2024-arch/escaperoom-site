@@ -217,7 +217,7 @@ function buildMessage(
   return lines.join("\n");
 }
 
-async function shouldNotify({
+async function evaluateNotification({
   recipient,
   session,
   finalizedAt,
@@ -225,7 +225,10 @@ async function shouldNotify({
   recipient: NotificationRecipientKey;
   session: BookingSession;
   finalizedAt: Date;
-}) {
+}): Promise<{
+  send: boolean;
+  reason: string;
+}> {
   const location =
     session.location as NotificationLocation;
 
@@ -233,7 +236,10 @@ async function shouldNotify({
     location !== "king-of-prussia" &&
     location !== "cherry-hill"
   ) {
-    return false;
+    return {
+      send: false,
+      reason: "invalid location",
+    };
   }
 
   const elevatorOverride =
@@ -245,13 +251,17 @@ async function shouldNotify({
     );
 
   if (elevatorOverride) {
-    return true;
+    return {
+      send: true,
+      reason: "Cherry Hill elevator override",
+    };
   }
 
   const days = await getEffectiveDays(
     recipient,
     location
   );
+
   const day =
     getEasternDayKey(finalizedAt);
 
@@ -259,7 +269,10 @@ async function shouldNotify({
     !DAY_KEYS.includes(day) ||
     !days.includes(day)
   ) {
-    return false;
+    return {
+      send: false,
+      reason: `day ${day} is not enabled`,
+    };
   }
 
   const start = parseBookingStart(
@@ -268,34 +281,64 @@ async function shouldNotify({
   );
 
   if (!start) {
-    return false;
+    return {
+      send: false,
+      reason: "booking date/time could not be parsed",
+    };
   }
 
   const settings =
     await getNotificationSettings();
+
+  const leadHours =
+    settings.leadTimeHours[recipient];
+
   const leadMs =
-    settings.leadTimeHours[recipient] *
+    leadHours *
     60 *
     60 *
     1000;
-  const untilGame =
-    start.getTime() - finalizedAt.getTime();
 
-  if (
-    untilGame < 0 ||
-    untilGame > leadMs
-  ) {
-    return false;
+  const untilGame =
+    start.getTime() -
+    finalizedAt.getTime();
+
+  if (untilGame < 0) {
+    return {
+      send: false,
+      reason: "game time has already passed",
+    };
+  }
+
+  if (untilGame > leadMs) {
+    const hoursAway =
+      untilGame / 60 / 60 / 1000;
+
+    return {
+      send: false,
+      reason:
+        `game is ${hoursAway.toFixed(1)} hours away; lead time is ${leadHours} hours`,
+    };
   }
 
   if (
     recipient === "kopTracfone" ||
     recipient === "chTracfone"
   ) {
-    return isWithinStoreHours(finalizedAt);
+    if (
+      !isWithinStoreHours(finalizedAt)
+    ) {
+      return {
+        send: false,
+        reason: "current time is outside store hours",
+      };
+    }
   }
 
-  return true;
+  return {
+    send: true,
+    reason: "notification rules matched",
+  };
 }
 
 export async function triggerCompletedBookingNotifications({
@@ -305,6 +348,14 @@ export async function triggerCompletedBookingNotifications({
   checkoutId: string;
   holdId?: string | null;
 }) {
+  const results: Array<{
+    recipient: NotificationRecipientKey;
+    label: string;
+    status: "sent" | "skipped" | "failed";
+    reason: string;
+    messageSid?: string | null;
+  }> = [];
+
   /*
    * Absolute safety rule: this function is called only
    * AFTER the ledger is already COMPLETE. Every error is
@@ -316,7 +367,11 @@ export async function triggerCompletedBookingNotifications({
       process.env.SMS_NOTIFICATIONS_ENABLED !==
       "true"
     ) {
-      return;
+      return {
+        results,
+        error:
+          "SMS notifications are disabled.",
+      };
     }
 
     let session =
@@ -343,7 +398,12 @@ export async function triggerCompletedBookingNotifications({
         "Completed booking notification source was unavailable.",
         { checkoutId }
       );
-      return;
+
+      return {
+        results,
+        error:
+          "Notification source session was unavailable.",
+      };
     }
 
     const finalizedAt = new Date();
@@ -354,13 +414,22 @@ export async function triggerCompletedBookingNotifications({
       NotificationRecipientKey[];
 
     for (const recipient of recipients) {
-      if (
-        !(await shouldNotify({
+      const evaluation =
+        await evaluateNotification({
           recipient,
           session,
           finalizedAt,
-        }))
-      ) {
+        });
+
+      if (!evaluation.send) {
+        results.push({
+          recipient,
+          label:
+            RECIPIENTS[recipient].label,
+          status: "skipped",
+          reason: evaluation.reason,
+        });
+
         continue;
       }
 
@@ -377,6 +446,15 @@ export async function triggerCompletedBookingNotifications({
       );
 
       if (claim !== "OK") {
+        results.push({
+          recipient,
+          label:
+            RECIPIENTS[recipient].label,
+          status: "skipped",
+          reason:
+            "duplicate-send protection blocked this recipient",
+        });
+
         continue;
       }
 
@@ -398,6 +476,15 @@ export async function triggerCompletedBookingNotifications({
             reason: result.message,
           }
         );
+
+        results.push({
+          recipient,
+          label:
+            RECIPIENTS[recipient].label,
+          status: "failed",
+          reason: result.message,
+        });
+
         continue;
       }
 
@@ -411,6 +498,15 @@ export async function triggerCompletedBookingNotifications({
         { ex: SENT_TTL_SECONDS }
       );
 
+      results.push({
+        recipient,
+        label:
+          RECIPIENTS[recipient].label,
+        status: "sent",
+        reason: evaluation.reason,
+        messageSid: result.messageSid,
+      });
+
       logBookingEvent(
         "notification.sent",
         {
@@ -423,16 +519,28 @@ export async function triggerCompletedBookingNotifications({
         }
       );
     }
+
+    return {
+      results,
+      error: null,
+    };
   } catch (error) {
+    const reason =
+      error instanceof Error
+        ? error.message
+        : "unknown";
+
     console.error(
       "Completed booking notification processing failed.",
       {
         checkoutId,
-        reason:
-          error instanceof Error
-            ? error.message
-            : "unknown",
+        reason,
       }
     );
+
+    return {
+      results,
+      error: reason,
+    };
   }
 }
