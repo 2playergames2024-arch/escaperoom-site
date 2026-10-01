@@ -126,12 +126,11 @@ export default function TermsAndConditionsPage() {
 
             <div className="space-y-3">
               <p>
-                Escape Room Mystery LLC may send recurring SMS notifications to
-                managers and designated staff members who have expressly agreed
-                to receive operational booking notifications. Messages may
-                include booking location, date, time, room, number of players,
-                customer contact information, and elevator-assistance
-                information when applicable.
+                <p>
+                  Escape Room Mystery does not send SMS messages to customers.
+                  Text messaging is used only for internal operational
+                  notifications to managers.
+                </p>
               </p>
 
               <p>
