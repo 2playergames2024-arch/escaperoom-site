@@ -196,7 +196,7 @@ export async function createFinalBookeoBooking(
 
                 /*
                  * Cherry Hill Bookeo customer custom field:
-                 * Elevator Access (field id JR9H9).
+                 * Elevator Access (field id JRF9H9).
                  *
                  * Bookeo's API requires the plain-text choice
                  * name ("Yes" / "No") for choice custom fields.
@@ -210,8 +210,8 @@ export async function createFinalBookeoBooking(
                         value:
                           session.elevatorAssistanceRequired ===
                             true
-                            ? "JRF9H9_XPWREWXE"
-                            : "JRF9H9_XTXENWHH",
+                            ? "Yes"
+                            : "No",
                       },
                     ]
                     : undefined,
@@ -230,8 +230,18 @@ export async function createFinalBookeoBooking(
         }
       );
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const data: any = null;
+    const rawResponse =
+      await response.text();
+
+    const data = (() => {
+      try {
+        return rawResponse
+          ? JSON.parse(rawResponse)
+          : null;
+      } catch {
+        return rawResponse;
+      }
+    })();
 
     console.error(
       "BOOKEO_FINAL_CREATE_RESPONSE",
