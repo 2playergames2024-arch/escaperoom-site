@@ -184,8 +184,14 @@ function locationLabel(
   location: NotificationLocation
 ) {
   return location === "cherry-hill"
-    ? "Cherry Hill"
-    : "King of Prussia";
+    ? "CH"
+    : "KoP";
+}
+
+function shortRoomName(roomName: string) {
+  return roomName
+    .split(" - ")[0]
+    .trim();
 }
 
 function buildMessage(
@@ -197,17 +203,17 @@ function buildMessage(
     )}`,
     `Date: ${formatDate(session.date)}`,
     `Time: ${session.time}`,
-    `Room: ${session.roomName}`,
-    `Phone Number: ${session.phone}`,
+    `Room: ${shortRoomName(session.roomName)}`,
+    `Phone: ${session.phone}`,
     `Name: ${`${session.firstName} ${session.lastName}`.trim()}`,
-    `Number of Players: ${session.players}`,
+    `# Players: ${session.players}`,
   ];
 
   if (
     session.location === "cherry-hill"
   ) {
     lines.push(
-      `Elevator Required: ${session.elevatorAssistanceRequired
+      `Elevator: ${session.elevatorAssistanceRequired
         ? "Yes"
         : "No"
       }`
