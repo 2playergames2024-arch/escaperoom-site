@@ -30,7 +30,11 @@ function sentKey(
   checkoutId: string,
   recipient: NotificationRecipientKey
 ) {
-  return `booking-notification-sent:${checkoutId}:${recipient}`;
+  return `booking-notification-sent:${checkoutId}:${recipient}:normal`;
+}
+
+function elevatorSentKey(checkoutId: string) {
+  return `booking-notification-sent:${checkoutId}:chTracfone:elevator`;
 }
 
 export async function rememberBookingNotificationSource(
@@ -248,18 +252,93 @@ async function evaluateNotification({
     };
   }
 
-  const elevatorOverride =
-    location === "cherry-hill" &&
-    session.elevatorAssistanceRequired === true &&
-    (
-      recipient === "david" ||
-      recipient === "chTracfone"
-    );
+  if (
+    recipient === "kopTracfone" &&
+    location === "cherry-hill"
+  ) {
+    return {
+      send: false,
+      reason: "Cherry Hill booking",
+    };
+  }
 
-  if (elevatorOverride) {
+  if (
+    recipient === "chTracfone" &&
+    location === "king-of-prussia"
+  ) {
+    return {
+      send: false,
+      reason: "King of Prussia booking",
+    };
+  }
+
+  const start = parseBookingStart(
+    session.date,
+    session.time
+  );
+
+  if (!start) {
+    return {
+      send: false,
+      reason: "booking date/time could not be parsed",
+    };
+  }
+
+  const untilGame =
+    start.getTime() -
+    finalizedAt.getTime();
+
+  if (untilGame < 0) {
+    return {
+      send: false,
+      reason: "game time has already passed",
+    };
+  }
+
+  /*
+   * Cherry Hill elevator bookings have a special rule:
+   *
+   * - The dedicated elevator text is handled separately and
+   *   always goes to the Cherry Hill Tracfone.
+   * - If the game is within 24 hours, the normal booking text
+   *   also goes to David and the Cherry Hill Tracfone.
+   * - If the game is more than 24 hours away, no normal booking
+   *   text is sent for the elevator booking.
+   *
+   * This special path intentionally bypasses the normal day and
+   * store-hours checks for David and the Cherry Hill Tracfone.
+   */
+  if (
+    location === "cherry-hill" &&
+    session.elevatorAssistanceRequired === true
+  ) {
+    const elevatorNormalWindowMs =
+      24 * 60 * 60 * 1000;
+
+    if (
+      recipient !== "david" &&
+      recipient !== "chTracfone"
+    ) {
+      return {
+        send: false,
+        reason: "Cherry Hill elevator booking",
+      };
+    }
+
+    if (untilGame > elevatorNormalWindowMs) {
+      const hoursAway =
+        untilGame / 60 / 60 / 1000;
+
+      return {
+        send: false,
+        reason:
+          `elevator booking is ${hoursAway.toFixed(1)} hours away; normal alert starts at 24 hours`,
+      };
+    }
+
     return {
       send: true,
-      reason: "Cherry Hill elevator override",
+      reason: "Cherry Hill elevator booking within 24 hours",
     };
   }
 
@@ -281,18 +360,6 @@ async function evaluateNotification({
     };
   }
 
-  const start = parseBookingStart(
-    session.date,
-    session.time
-  );
-
-  if (!start) {
-    return {
-      send: false,
-      reason: "booking date/time could not be parsed",
-    };
-  }
-
   const settings =
     await getNotificationSettings();
 
@@ -304,17 +371,6 @@ async function evaluateNotification({
     60 *
     60 *
     1000;
-
-  const untilGame =
-    start.getTime() -
-    finalizedAt.getTime();
-
-  if (untilGame < 0) {
-    return {
-      send: false,
-      reason: "game time has already passed",
-    };
-  }
 
   if (untilGame > leadMs) {
     const hoursAway =
@@ -467,6 +523,7 @@ export async function triggerCompletedBookingNotifications({
       const result = await sendSms({
         to: RECIPIENTS[recipient].phone,
         body: message,
+        sender: "normal",
       });
 
       if (result.ok === false) {
@@ -524,6 +581,98 @@ export async function triggerCompletedBookingNotifications({
           },
         }
       );
+    }
+
+    if (
+      session.location === "cherry-hill" &&
+      session.elevatorAssistanceRequired === true
+    ) {
+      const elevatorClaim = await redis.set(
+        elevatorSentKey(checkoutId),
+        {
+          status: "sending",
+          claimedAt: Date.now(),
+        },
+        {
+          nx: true,
+          ex: SENT_TTL_SECONDS,
+        }
+      );
+
+      if (elevatorClaim !== "OK") {
+        results.push({
+          recipient: "chTracfone",
+          label:
+            "Cherry Hill Tracfone - Elevator Thread",
+          status: "skipped",
+          reason:
+            "duplicate-send protection blocked the elevator alert",
+        });
+      } else {
+        const elevatorResult = await sendSms({
+          to: RECIPIENTS.chTracfone.phone,
+          body: message,
+          sender: "elevator",
+        });
+
+        if (elevatorResult.ok === false) {
+          await redis.del(
+            elevatorSentKey(checkoutId)
+          );
+
+          console.error(
+            "Elevator SMS notification failed.",
+            {
+              checkoutId,
+              recipient: "chTracfone",
+              reason: elevatorResult.message,
+            }
+          );
+
+          results.push({
+            recipient: "chTracfone",
+            label:
+              "Cherry Hill Tracfone - Elevator Thread",
+            status: "failed",
+            reason: elevatorResult.message,
+          });
+        } else {
+          await redis.set(
+            elevatorSentKey(checkoutId),
+            {
+              status: "sent",
+              sentAt: Date.now(),
+              messageSid:
+                elevatorResult.messageSid,
+            },
+            { ex: SENT_TTL_SECONDS }
+          );
+
+          results.push({
+            recipient: "chTracfone",
+            label:
+              "Cherry Hill Tracfone - Elevator Thread",
+            status: "sent",
+            reason:
+              "Cherry Hill elevator booking",
+            messageSid:
+              elevatorResult.messageSid,
+          });
+
+          logBookingEvent(
+            "notification.sent",
+            {
+              checkoutId,
+              metadata: {
+                recipient: "chTracfone",
+                notificationType: "elevator",
+                messageSid:
+                  elevatorResult.messageSid,
+              },
+            }
+          );
+        }
+      }
     }
 
     return {

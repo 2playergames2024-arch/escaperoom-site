@@ -42,7 +42,8 @@ export async function POST(request: Request) {
   if (
     !process.env.TWILIO_ACCOUNT_SID ||
     !process.env.TWILIO_AUTH_TOKEN ||
-    !process.env.TWILIO_FROM_NUMBER
+    !process.env.TWILIO_FROM_NUMBER1 ||
+    !process.env.TWILIO_FROM_NUMBER2
   ) {
     return NextResponse.json(
       {

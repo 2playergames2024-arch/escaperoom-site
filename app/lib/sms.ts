@@ -4,12 +4,18 @@ export type SmsResult =
   | { ok: true; messageSid: string | null }
   | { ok: false; message: string };
 
+export type SmsSender =
+  | "normal"
+  | "elevator";
+
 export async function sendSms({
   to,
   body,
+  sender = "normal",
 }: {
   to: string;
   body: string;
+  sender?: SmsSender;
 }): Promise<SmsResult> {
   if (
     process.env.SMS_NOTIFICATIONS_ENABLED !==
@@ -25,14 +31,24 @@ export async function sendSms({
     process.env.TWILIO_ACCOUNT_SID;
   const authToken =
     process.env.TWILIO_AUTH_TOKEN;
+
+  const normalFrom =
+    process.env.TWILIO_FROM_NUMBER1;
+  const elevatorFrom =
+    process.env.TWILIO_FROM_NUMBER2;
+
   const from =
-    process.env.TWILIO_FROM_NUMBER;
+    sender === "elevator"
+      ? elevatorFrom
+      : normalFrom;
 
   if (!accountSid || !authToken || !from) {
     return {
       ok: false,
       message:
-        "Twilio is not fully configured.",
+        sender === "elevator"
+          ? "Twilio elevator sender is not fully configured."
+          : "Twilio normal sender is not fully configured.",
     };
   }
 
@@ -88,3 +104,4 @@ export async function sendSms({
     };
   }
 }
+
