@@ -5,6 +5,11 @@ import { incrementRateLimit } from "@/app/lib/rateLimit";
 const resend = new Resend(process.env.RESEND_API_KEY);
 const redis = Redis.fromEnv();
 
+const VALID_LOCATIONS = [
+  "Cherry Hill, New Jersey",
+  "King of Prussia, Pennsylvania",
+] as const;
+
 export async function POST(request: Request) {
   try {
     const forwardedFor = request.headers.get("x-forwarded-for");
@@ -38,6 +43,7 @@ export async function POST(request: Request) {
     const name = String(formData.get("name") || "").trim();
     const email = String(formData.get("email") || "").trim();
     const phone = String(formData.get("phone") || "").trim();
+    const location = String(formData.get("location") || "").trim();
     const message = String(formData.get("message") || "").trim();
 
     // Hidden honeypot field. Real customers should never fill this in.
@@ -52,9 +58,18 @@ export async function POST(request: Request) {
       });
     }
 
-    if (!name || !email || !message) {
+    if (!name || !email || !location || !message) {
       return Response.json(
-        { error: "Name, email, and message are required." },
+        { error: "Name, email, location, and message are required." },
+        { status: 400 }
+      );
+    }
+
+    if (!VALID_LOCATIONS.includes(
+      location as (typeof VALID_LOCATIONS)[number]
+    )) {
+      return Response.json(
+        { error: "Please select a valid location." },
         { status: 400 }
       );
     }
@@ -100,11 +115,12 @@ export async function POST(request: Request) {
       from: "Escape Room Mystery <info@escaperoommystery.com>",
       to: ["info@escaperoommystery.com"],
       replyTo: email,
-      subject: `Website Contact Form - ${name}`,
+      subject: `Website Contact Form - ${location} - ${name}`,
       text: `
 Name: ${name}
 Email: ${email}
 Phone: ${phone}
+Location: ${location}
 
 Message:
 ${message}

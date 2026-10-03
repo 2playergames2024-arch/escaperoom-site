@@ -127,6 +127,33 @@ export default async function ContactPage({
 
               <div>
                 <label
+                  htmlFor="contact-location"
+                  className="mb-2 block font-bold"
+                >
+                  Which location?
+                </label>
+
+                <select
+                  id="contact-location"
+                  name="location"
+                  required
+                  defaultValue=""
+                  className="w-full rounded-lg border border-slate-600 bg-slate-900 px-4 py-3.5 text-base text-white outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500"
+                >
+                  <option value="" disabled>
+                    Select a location...
+                  </option>
+                  <option value="Cherry Hill, New Jersey">
+                    Cherry Hill, New Jersey
+                  </option>
+                  <option value="King of Prussia, Pennsylvania">
+                    King of Prussia, Pennsylvania
+                  </option>
+                </select>
+              </div>
+
+              <div>
+                <label
                   htmlFor="contact-message"
                   className="mb-2 block font-bold"
                 >
