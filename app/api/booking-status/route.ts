@@ -75,10 +75,18 @@ export async function POST(
                 }
             }
 
+            const confirmedPayment =
+                await redis.get<VerifiedPayment>(
+                    `verified-payment:${sessionId}`
+                );
+
             const value =
-                session
-                    ? Number(session.total)
-                    : NaN;
+                confirmedPayment?.transactionId ===
+                    finalizedBooking.transactionId
+                    ? Number(confirmedPayment.amount)
+                    : session
+                        ? Number(session.total)
+                        : NaN;
 
             const players =
                 session

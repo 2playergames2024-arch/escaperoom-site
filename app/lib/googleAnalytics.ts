@@ -4,6 +4,7 @@ export const GA4_MEASUREMENT_ID =
 declare global {
   interface Window {
     dataLayer?: unknown[];
+    fbq?: (...args: unknown[]) => void;
     gtag?: (
       command: string,
       ...args: unknown[]
@@ -123,4 +124,54 @@ export function trackGa4Purchase(
       ],
     }
   );
+}
+
+/** Report a confirmed, paid booking to the existing GA4 setup, GTM, and Meta. */
+export function trackPurchase(purchase: Ga4Purchase) {
+  if (
+    typeof window === "undefined" ||
+    !purchase.transactionId ||
+    !Number.isFinite(purchase.value) ||
+    purchase.value <= 0
+  ) {
+    return;
+  }
+
+  const key = `erm:purchase:${purchase.transactionId}`;
+  try {
+    if (window.sessionStorage.getItem(key) === "sent") return;
+    window.sessionStorage.setItem(key, "sent");
+  } catch {
+    // Browsers can block storage. Still send the confirmed purchase.
+  }
+
+  trackGa4Purchase(purchase);
+
+  window.dataLayer = window.dataLayer || [];
+  window.dataLayer.push({ ecommerce: null });
+  window.dataLayer.push({
+    event: "booking_purchase",
+    ecommerce: {
+      transaction_id: purchase.transactionId,
+      value: purchase.value,
+      currency: purchase.currency,
+      items: [{
+        item_id: purchase.productId,
+        item_name: purchase.roomName,
+        item_category: purchase.location,
+        quantity: 1,
+      }],
+    },
+  });
+
+  if (typeof window.fbq === "function") {
+    window.fbq("track", "Purchase", {
+      value: purchase.value,
+      currency: purchase.currency,
+      content_ids: [purchase.productId],
+      content_name: purchase.roomName,
+      content_type: "product",
+      num_items: 1,
+    }, { eventID: purchase.transactionId });
+  }
 }

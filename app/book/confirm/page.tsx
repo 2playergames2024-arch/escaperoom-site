@@ -19,7 +19,7 @@ import {
 } from "../../lib/clarity";
 
 import {
-  trackGa4Purchase,
+  trackPurchase,
   type Ga4Purchase,
 } from "../../lib/googleAnalytics";
 
@@ -117,7 +117,7 @@ function ConfirmPageContent() {
             data.purchase &&
             !purchaseTracked
           ) {
-            trackGa4Purchase(
+            trackPurchase(
               data.purchase as
               Ga4Purchase
             );
