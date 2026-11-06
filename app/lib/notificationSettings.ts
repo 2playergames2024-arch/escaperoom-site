@@ -108,7 +108,7 @@ export const DEFAULT_DAY_MATRIX: DayMatrix = {
     "king-of-prussia": ["sun", "thu"],
     "cherry-hill": [
       "sun",
-      "wed",
+      "mon",
       "thu",
       "fri",
       "sat",
@@ -501,7 +501,7 @@ export function getPermissions(
     role,
     editableRecipients: (
       Object.keys(RECIPIENTS) as
-        NotificationRecipientKey[]
+      NotificationRecipientKey[]
     ).filter((recipient) =>
       canEditRecipient(role, recipient)
     ),
@@ -544,8 +544,8 @@ export function isWithinStoreHours(
 
   return (
     currentMinutes >=
-      toMinutes(hours.start) &&
+    toMinutes(hours.start) &&
     currentMinutes <=
-      toMinutes(hours.end)
+    toMinutes(hours.end)
   );
 }
