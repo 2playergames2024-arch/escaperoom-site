@@ -4,6 +4,13 @@ import type { NotificationAdminRole } from "./notificationAdminAuth";
 
 const redis = Redis.fromEnv();
 
+// Localhost development tests must never alter live notification schedules.
+// This in-memory store is only used under `npm run dev` (NODE_ENV=development).
+// It survives browser refreshes but resets when the development server restarts.
+const USE_LOCAL_TEST_STORE = process.env.NODE_ENV === "development";
+const localOverrides = new Map<string, { enabled: boolean; expiresAt: number }>();
+let localSettings: NotificationSettings | null = null;
+
 export const EASTERN_TIME_ZONE =
   "America/New_York";
 
@@ -95,7 +102,7 @@ export const DEFAULT_DAY_MATRIX: DayMatrix = {
       "fri",
       "sat",
     ],
-    "cherry-hill": ["mon", "tue"],
+    "cherry-hill": ["tue", "wed"],
   },
   david: {
     "king-of-prussia": ["sun", "thu"],
@@ -290,6 +297,14 @@ export function getEasternDayKey(
 }
 
 export async function getNotificationSettings() {
+  if (USE_LOCAL_TEST_STORE) {
+    return {
+      leadTimeHours: {
+        ...(localSettings?.leadTimeHours ?? DEFAULT_SETTINGS.leadTimeHours),
+      },
+    } satisfies NotificationSettings;
+  }
+
   const stored =
     await redis.get<Partial<NotificationSettings>>(
       SETTINGS_KEY
@@ -335,7 +350,11 @@ export async function updateLeadTimeHours(
       current.leadTimeHours[recipient]
     );
 
-  await redis.set(SETTINGS_KEY, current);
+  if (USE_LOCAL_TEST_STORE) {
+    localSettings = current;
+  } else {
+    await redis.set(SETTINGS_KEY, current);
+  }
 
   return current;
 }
@@ -345,16 +364,22 @@ async function getDayOverride(
   location: NotificationLocation,
   day: DayKey
 ) {
-  const value = await redis.get<string>(
-    dayOverrideKey(
-      recipient,
-      location,
-      day
-    )
-  );
+  const key = dayOverrideKey(recipient, location, day);
+  if (USE_LOCAL_TEST_STORE) {
+    const local = localOverrides.get(key);
+    if (!local) return null;
+    if (Date.now() >= local.expiresAt) {
+      localOverrides.delete(key);
+      return null;
+    }
+    return local.enabled;
+  }
 
-  if (value === "1") return true;
-  if (value === "0") return false;
+  // Upstash automatically JSON-decodes the stored "1"/"0" into numbers.
+  // Handle both numbers and strings for existing records.
+  const value = await redis.get<string | number | boolean>(key);
+  if (value === "1" || value === 1 || value === true) return true;
+  if (value === "0" || value === 0 || value === false) return false;
   return null;
 }
 
@@ -436,17 +461,23 @@ export async function setTemporaryDays(
     );
 
     if (enabled === defaultEnabled) {
-      await redis.del(key);
+      if (USE_LOCAL_TEST_STORE) {
+        localOverrides.delete(key);
+      } else {
+        await redis.del(key);
+      }
       continue;
     }
 
-    await redis.set(
-      key,
-      enabled ? "1" : "0",
-      {
-        ex: getSecondsUntilDayEnds(day),
-      }
-    );
+    const ttlSeconds = getSecondsUntilDayEnds(day);
+    if (USE_LOCAL_TEST_STORE) {
+      localOverrides.set(key, {
+        enabled,
+        expiresAt: Date.now() + ttlSeconds * 1000,
+      });
+    } else {
+      await redis.set(key, enabled ? "1" : "0", { ex: ttlSeconds });
+    }
   }
 
   return sanitized;

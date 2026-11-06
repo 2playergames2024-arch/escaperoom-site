@@ -473,14 +473,15 @@ export default function NotificationAdminClient() {
                                   day
                                 )
                               }
+                              aria-pressed={active}
                               className={`min-h-10 rounded-lg border px-2 py-2 text-sm font-medium ${
-                                active
-                                  ? "border-white/40 bg-white text-black"
-                                  : "border-white/10 bg-black text-neutral-500"
-                              } ${
                                 changed
-                                  ? "ring-2 ring-amber-400/50"
-                                  : ""
+                                  ? active
+                                    ? "border-green-500 bg-green-600 text-white"
+                                    : "border-red-500 bg-red-600 text-white"
+                                  : active
+                                    ? "border-white/40 bg-white text-black"
+                                    : "border-white/10 bg-black text-neutral-500"
                               } disabled:cursor-not-allowed disabled:opacity-50`}
                             >
                               {label}
@@ -495,6 +496,19 @@ export default function NotificationAdminClient() {
             }
           )}
         </div>
+
+        <section className="mt-3 rounded-xl border border-white/10 bg-neutral-900 p-4">
+          <h2 className="text-sm font-semibold text-white">Temporary notification changes</h2>
+          <p className="mt-2 text-sm text-neutral-300">
+            <span className="font-semibold text-red-400">Red:</span> You will not receive notifications the next time this weekday occurs.
+          </p>
+          <p className="mt-1 text-sm text-neutral-300">
+            <span className="font-semibold text-green-400">Green:</span> You will receive notifications the next time this weekday occurs.
+          </p>
+          <p className="mt-2 text-xs text-neutral-400">
+            These temporary changes expire at midnight Eastern at the end of the selected day. White and black indicate the normal schedule.
+          </p>
+        </section>
 
         <section className="mt-3 rounded-xl border border-white/10 bg-neutral-900 p-4">
           <h2 className="text-lg font-semibold">
